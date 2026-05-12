@@ -17,7 +17,6 @@ import * as Errors from './core/error';
 import * as Uploads from './core/uploads';
 import * as API from './resources/index';
 import { APIPromise } from './core/api-promise';
-import { Event } from './resources/event';
 import {
   Artifact,
   Episode,
@@ -26,13 +25,12 @@ import {
   MemoryAddParams,
   MemoryAddResponse,
   MemoryDeleteResponse,
+  MemoryItem,
   MemoryListParams,
   MemoryListResponse,
-  MemoryRetrieveResponse,
   MemorySearchParams,
   MemorySearchResponse,
   MemoryUpdateParams,
-  MemoryUpdateResponse,
 } from './resources/memories';
 import { type Fetch } from './internal/builtin-types';
 import { HeadersLike, NullableHeaders, buildHeaders } from './internal/headers';
@@ -54,7 +52,7 @@ export interface ClientOptions {
   apiKey?: string | null | undefined;
 
   /**
-   * mem0-style: `Authorization: Token <api-key>`.
+   * Long-lived API key sent as `Authorization: Token <api-key>`.
    */
   bearerToken?: string | null | undefined;
 
@@ -817,11 +815,9 @@ export class XtraceMemoryManager {
   static toFile = Uploads.toFile;
 
   memories: API.Memories = new API.Memories(this);
-  event: API.Event = new API.Event(this);
 }
 
 XtraceMemoryManager.Memories = Memories;
-XtraceMemoryManager.Event = Event;
 
 export declare namespace XtraceMemoryManager {
   export type RequestOptions = Opts.RequestOptions;
@@ -831,8 +827,7 @@ export declare namespace XtraceMemoryManager {
     type Artifact as Artifact,
     type Episode as Episode,
     type Fact as Fact,
-    type MemoryRetrieveResponse as MemoryRetrieveResponse,
-    type MemoryUpdateResponse as MemoryUpdateResponse,
+    type MemoryItem as MemoryItem,
     type MemoryListResponse as MemoryListResponse,
     type MemoryDeleteResponse as MemoryDeleteResponse,
     type MemoryAddResponse as MemoryAddResponse,
@@ -842,6 +837,4 @@ export declare namespace XtraceMemoryManager {
     type MemoryAddParams as MemoryAddParams,
     type MemorySearchParams as MemorySearchParams,
   };
-
-  export { Event as Event };
 }

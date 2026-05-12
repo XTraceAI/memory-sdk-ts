@@ -10,7 +10,7 @@ export class Memories extends APIResource {
   /**
    * Get one memory by id. Scope resolved from the row itself.
    */
-  retrieve(memoryID: string, options?: RequestOptions): APIPromise<MemoryRetrieveResponse> {
+  retrieve(memoryID: string, options?: RequestOptions): APIPromise<MemoryItem> {
     return this._client.get(path`/v1/memories/${memoryID}/`, {
       ...options,
       __security: { apiKeyHeaderAuth: true, orgIDAuth: true, bearerTokenAuth: true },
@@ -23,11 +23,7 @@ export class Memories extends APIResource {
    * Metadata-only patches (no `text`) are rejected with 400; the row's metadata is
    * derived from extraction and isn't editable from the API yet.
    */
-  update(
-    memoryID: string,
-    body: MemoryUpdateParams,
-    options?: RequestOptions,
-  ): APIPromise<MemoryUpdateResponse> {
+  update(memoryID: string, body: MemoryUpdateParams, options?: RequestOptions): APIPromise<MemoryItem> {
     return this._client.patch(path`/v1/memories/${memoryID}/`, {
       body,
       ...options,
@@ -180,32 +176,7 @@ export interface Fact {
 /**
  * One result item — used in flat search `results` and listings.
  */
-export interface MemoryRetrieveResponse {
-  id: string;
-
-  memory: string;
-
-  agent_id?: string | null;
-
-  categories?: Array<string>;
-
-  conv_id?: string | null;
-
-  created_at?: string | null;
-
-  metadata?: { [key: string]: unknown };
-
-  score?: number | null;
-
-  updated_at?: string | null;
-
-  user_id?: string | null;
-}
-
-/**
- * One result item — used in flat search `results` and listings.
- */
-export interface MemoryUpdateResponse {
+export interface MemoryItem {
   id: string;
 
   memory: string;
@@ -237,34 +208,7 @@ export interface MemoryListResponse {
 
   previous?: string | null;
 
-  results?: Array<MemoryListResponse.Result>;
-}
-
-export namespace MemoryListResponse {
-  /**
-   * One result item — used in flat search `results` and listings.
-   */
-  export interface Result {
-    id: string;
-
-    memory: string;
-
-    agent_id?: string | null;
-
-    categories?: Array<string>;
-
-    conv_id?: string | null;
-
-    created_at?: string | null;
-
-    metadata?: { [key: string]: unknown };
-
-    score?: number | null;
-
-    updated_at?: string | null;
-
-    user_id?: string | null;
-  }
+  results?: Array<MemoryItem>;
 }
 
 export type MemoryDeleteResponse = unknown;
@@ -292,7 +236,7 @@ export interface MemoryAddResponse {
 
   mode?: 'chat' | 'import';
 
-  results?: Array<MemoryAddResponse.Result>;
+  results?: Array<MemoryItem>;
 
   stage_timings?: { [key: string]: number };
 
@@ -318,31 +262,6 @@ export namespace MemoryAddResponse {
 
     stage_timings?: { [key: string]: number };
   }
-
-  /**
-   * One result item — used in flat search `results` and listings.
-   */
-  export interface Result {
-    id: string;
-
-    memory: string;
-
-    agent_id?: string | null;
-
-    categories?: Array<string>;
-
-    conv_id?: string | null;
-
-    created_at?: string | null;
-
-    metadata?: { [key: string]: unknown };
-
-    score?: number | null;
-
-    updated_at?: string | null;
-
-    user_id?: string | null;
-  }
 }
 
 /**
@@ -365,36 +284,9 @@ export interface MemorySearchResponse {
 
   mode?: 'flat' | 'context';
 
-  results?: Array<MemorySearchResponse.Result>;
+  results?: Array<MemoryItem>;
 
   stage_timings?: { [key: string]: number };
-}
-
-export namespace MemorySearchResponse {
-  /**
-   * One result item — used in flat search `results` and listings.
-   */
-  export interface Result {
-    id: string;
-
-    memory: string;
-
-    agent_id?: string | null;
-
-    categories?: Array<string>;
-
-    conv_id?: string | null;
-
-    created_at?: string | null;
-
-    metadata?: { [key: string]: unknown };
-
-    score?: number | null;
-
-    updated_at?: string | null;
-
-    user_id?: string | null;
-  }
 }
 
 export interface MemoryUpdateParams {
@@ -483,8 +375,7 @@ export declare namespace Memories {
     type Artifact as Artifact,
     type Episode as Episode,
     type Fact as Fact,
-    type MemoryRetrieveResponse as MemoryRetrieveResponse,
-    type MemoryUpdateResponse as MemoryUpdateResponse,
+    type MemoryItem as MemoryItem,
     type MemoryListResponse as MemoryListResponse,
     type MemoryDeleteResponse as MemoryDeleteResponse,
     type MemoryAddResponse as MemoryAddResponse,

@@ -1,13 +1,11 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
-export { Event } from './event';
 export {
   Memories,
   type Artifact,
   type Episode,
   type Fact,
-  type MemoryRetrieveResponse,
-  type MemoryUpdateResponse,
+  type MemoryItem,
   type MemoryListResponse,
   type MemoryDeleteResponse,
   type MemoryAddResponse,
