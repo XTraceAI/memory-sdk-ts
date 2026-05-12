@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["dist/src"],
+  "exclude": [],
+  "compilerOptions": {
+    "rootDir": "./dist/src",
+    "paths": {
+      "xtrace-memory-manager/*": ["./dist/src/*"],
+      "xtrace-memory-manager": ["./dist/src/index.ts"]
+    },
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "dist",
+    "pretty": true,
+    "sourceMap": true
+  }
+}
