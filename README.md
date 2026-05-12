@@ -32,7 +32,7 @@ const client = new XtraceMemoryManager({
 
 const response = await client.memories.add({ messages: [{ content: 'content', role: 'role' }] });
 
-console.log(response.event_id);
+console.log(response.consolidation_id_mapping);
 ```
 
 ### Request & Response types
@@ -156,7 +156,7 @@ const { data: response, response: raw } = await client.memories
   .add({ messages: [{ content: 'content', role: 'role' }] })
   .withResponse();
 console.log(raw.headers.get('X-My-Header'));
-console.log(response.event_id);
+console.log(response.consolidation_id_mapping);
 ```
 
 ### Logging

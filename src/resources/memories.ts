@@ -10,7 +10,7 @@ export class Memories extends APIResource {
   /**
    * Get one memory by id. Scope resolved from the row itself.
    */
-  retrieve(memoryID: string, options?: RequestOptions): APIPromise<Mem0Memory> {
+  retrieve(memoryID: string, options?: RequestOptions): APIPromise<MemoryRetrieveResponse> {
     return this._client.get(path`/v1/memories/${memoryID}/`, {
       ...options,
       __security: { apiKeyHeaderAuth: true, orgIDAuth: true, bearerTokenAuth: true },
@@ -19,8 +19,15 @@ export class Memories extends APIResource {
 
   /**
    * Update memory text — supersedes old + creates new.
+   *
+   * Metadata-only patches (no `text`) are rejected with 400; the row's metadata is
+   * derived from extraction and isn't editable from the API yet.
    */
-  update(memoryID: string, body: MemoryUpdateParams, options?: RequestOptions): APIPromise<Mem0Memory> {
+  update(
+    memoryID: string,
+    body: MemoryUpdateParams,
+    options?: RequestOptions,
+  ): APIPromise<MemoryUpdateResponse> {
     return this._client.patch(path`/v1/memories/${memoryID}/`, {
       body,
       ...options,
@@ -30,9 +37,6 @@ export class Memories extends APIResource {
 
   /**
    * List active memories matching `filters`. Paginated.
-   *
-   * `filters` carries the same shape as `/search/`: at least one entity id; optional
-   * workspace_id / cb_id / OR clauses.
    */
   list(params: MemoryListParams, options?: RequestOptions): APIPromise<MemoryListResponse> {
     const { page, page_size, ...body } = params;
@@ -58,7 +62,7 @@ export class Memories extends APIResource {
    * Ingest memories. `mode=chat` pairs messages; `mode=import` is bulk.
    *
    * Workspace/CB write target lives in `metadata.workspace_id` / `metadata.cb_id`
-   * (absent → hosted single-tenant write).
+   * (absent → hosted single-tenant).
    */
   add(body: MemoryAddParams, options?: RequestOptions): APIPromise<MemoryAddResponse> {
     return this._client.post('/v1/memories/add/', {
@@ -69,7 +73,7 @@ export class Memories extends APIResource {
   }
 
   /**
-   * Search memories. `mode=flat` returns a flat list; `mode=context` runs the full
+   * Search memories. `mode=flat` returns flat results; `mode=context` runs the full
    * retrieval agent and returns assembled context.
    */
   search(body: MemorySearchParams, options?: RequestOptions): APIPromise<MemorySearchResponse> {
@@ -174,24 +178,22 @@ export interface Fact {
 }
 
 /**
- * One result item in mem0's response envelope.
+ * One result item — used in flat search `results` and listings.
  */
-export interface Mem0Memory {
+export interface MemoryRetrieveResponse {
   id: string;
 
   memory: string;
 
   agent_id?: string | null;
 
-  app_id?: string | null;
-
   categories?: Array<string>;
+
+  conv_id?: string | null;
 
   created_at?: string | null;
 
   metadata?: { [key: string]: unknown };
-
-  run_id?: string | null;
 
   score?: number | null;
 
@@ -201,7 +203,32 @@ export interface Mem0Memory {
 }
 
 /**
- * mem0's paginated envelope.
+ * One result item — used in flat search `results` and listings.
+ */
+export interface MemoryUpdateResponse {
+  id: string;
+
+  memory: string;
+
+  agent_id?: string | null;
+
+  categories?: Array<string>;
+
+  conv_id?: string | null;
+
+  created_at?: string | null;
+
+  metadata?: { [key: string]: unknown };
+
+  score?: number | null;
+
+  updated_at?: string | null;
+
+  user_id?: string | null;
+}
+
+/**
+ * Paginated list envelope.
  */
 export interface MemoryListResponse {
   count: number;
@@ -210,7 +237,34 @@ export interface MemoryListResponse {
 
   previous?: string | null;
 
-  results?: Array<Mem0Memory>;
+  results?: Array<MemoryListResponse.Result>;
+}
+
+export namespace MemoryListResponse {
+  /**
+   * One result item — used in flat search `results` and listings.
+   */
+  export interface Result {
+    id: string;
+
+    memory: string;
+
+    agent_id?: string | null;
+
+    categories?: Array<string>;
+
+    conv_id?: string | null;
+
+    created_at?: string | null;
+
+    metadata?: { [key: string]: unknown };
+
+    score?: number | null;
+
+    updated_at?: string | null;
+
+    user_id?: string | null;
+  }
 }
 
 export type MemoryDeleteResponse = unknown;
@@ -218,25 +272,27 @@ export type MemoryDeleteResponse = unknown;
 /**
  * Returned by POST /v1/memories/add/.
  *
- * Carries mem0's envelope (`event_id`, `status`, `message`) and our richer
- * xmem-DTO fields (`stored_facts`, `stored_artifacts`, `flush_result`, etc.)
- * alongside. mem0 SDKs that only read the envelope work unchanged; clients that
- * want episode ids / belief- revision events read the extra fields.
+ * Sync inline result — the full extracted set is in the response; no event_id /
+ * async polling. `results` mirrors the flat-list shape that search returns, so
+ * clients can read just-stored memories with one consistent shape.
  */
 export interface MemoryAddResponse {
-  event_id: string;
-
   consolidation_id_mapping?: { [key: string]: string };
 
   /**
-   * Serialized xmem `FlushResult` — episode ids produced when auto-flush (chat mode)
-   * or `flush_after` (import mode) fires.
+   * Non-null only when an auto-flush fires this call. Triggers: (a)
+   * `ThresholdFlushPolicy` reaches its threshold (default: 20 accumulated events or
+   * 100k characters); (b) `mode=chat` and `flush_hint='force'` was set; (c)
+   * `mode=import` and `flush_after=true` was set. Carries the freshly-minted episode
+   * ids.
    */
   flush_result?: MemoryAddResponse.FlushResult | null;
 
   message?: string;
 
   mode?: 'chat' | 'import';
+
+  results?: Array<MemoryAddResponse.Result>;
 
   stage_timings?: { [key: string]: number };
 
@@ -251,21 +307,50 @@ export interface MemoryAddResponse {
 
 export namespace MemoryAddResponse {
   /**
-   * Serialized xmem `FlushResult` — episode ids produced when auto-flush (chat mode)
-   * or `flush_after` (import mode) fires.
+   * Non-null only when an auto-flush fires this call. Triggers: (a)
+   * `ThresholdFlushPolicy` reaches its threshold (default: 20 accumulated events or
+   * 100k characters); (b) `mode=chat` and `flush_hint='force'` was set; (c)
+   * `mode=import` and `flush_after=true` was set. Carries the freshly-minted episode
+   * ids.
    */
   export interface FlushResult {
     episodes?: Array<MemoriesAPI.Episode>;
 
     stage_timings?: { [key: string]: number };
   }
+
+  /**
+   * One result item — used in flat search `results` and listings.
+   */
+  export interface Result {
+    id: string;
+
+    memory: string;
+
+    agent_id?: string | null;
+
+    categories?: Array<string>;
+
+    conv_id?: string | null;
+
+    created_at?: string | null;
+
+    metadata?: { [key: string]: unknown };
+
+    score?: number | null;
+
+    updated_at?: string | null;
+
+    user_id?: string | null;
+  }
 }
 
 /**
  * Returned by POST /v1/memories/search/.
  *
- * Mem0's flat `results` is always populated. In `mode=context` the additional
- * fields (`context`, `artifacts`, `episodes`) are filled in alongside.
+ * `results` is the flat list (always populated when matches exist). In
+ * `mode=context` the additional fields (`context`, `artifacts`, `episodes`) are
+ * filled in too. In `mode=flat` they're empty.
  */
 export interface MemorySearchResponse {
   all_retrieved_artifacts?: Array<Artifact>;
@@ -280,9 +365,36 @@ export interface MemorySearchResponse {
 
   mode?: 'flat' | 'context';
 
-  results?: Array<Mem0Memory>;
+  results?: Array<MemorySearchResponse.Result>;
 
   stage_timings?: { [key: string]: number };
+}
+
+export namespace MemorySearchResponse {
+  /**
+   * One result item — used in flat search `results` and listings.
+   */
+  export interface Result {
+    id: string;
+
+    memory: string;
+
+    agent_id?: string | null;
+
+    categories?: Array<string>;
+
+    conv_id?: string | null;
+
+    created_at?: string | null;
+
+    metadata?: { [key: string]: unknown };
+
+    score?: number | null;
+
+    updated_at?: string | null;
+
+    user_id?: string | null;
+  }
 }
 
 export interface MemoryUpdateParams {
@@ -313,9 +425,9 @@ export interface MemoryAddParams {
 
   agent_id?: string | null;
 
-  app_id?: string | null;
-
   config_overrides?: { [key: string]: unknown } | null;
+
+  conv_id?: string | null;
 
   custom_instructions?: string | null;
 
@@ -328,8 +440,6 @@ export interface MemoryAddParams {
   metadata?: { [key: string]: unknown } | null;
 
   mode?: 'chat' | 'import';
-
-  run_id?: string | null;
 
   user_id?: string | null;
 }
@@ -353,9 +463,9 @@ export interface MemorySearchParams {
 
   char_budget?: number | null;
 
-  conv_id?: string | null;
+  conv_history?: Array<{ [key: string]: unknown }> | null;
 
-  conversation_history?: Array<{ [key: string]: unknown }> | null;
+  conv_id?: string | null;
 
   exclude_artifact_ids?: Array<string> | null;
 
@@ -373,7 +483,8 @@ export declare namespace Memories {
     type Artifact as Artifact,
     type Episode as Episode,
     type Fact as Fact,
-    type Mem0Memory as Mem0Memory,
+    type MemoryRetrieveResponse as MemoryRetrieveResponse,
+    type MemoryUpdateResponse as MemoryUpdateResponse,
     type MemoryListResponse as MemoryListResponse,
     type MemoryDeleteResponse as MemoryDeleteResponse,
     type MemoryAddResponse as MemoryAddResponse,

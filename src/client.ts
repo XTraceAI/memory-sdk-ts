@@ -17,21 +17,22 @@ import * as Errors from './core/error';
 import * as Uploads from './core/uploads';
 import * as API from './resources/index';
 import { APIPromise } from './core/api-promise';
-import { Event, EventRetrieveResponse } from './resources/event';
+import { Event } from './resources/event';
 import {
   Artifact,
   Episode,
   Fact,
-  Mem0Memory,
   Memories,
   MemoryAddParams,
   MemoryAddResponse,
   MemoryDeleteResponse,
   MemoryListParams,
   MemoryListResponse,
+  MemoryRetrieveResponse,
   MemorySearchParams,
   MemorySearchResponse,
   MemoryUpdateParams,
+  MemoryUpdateResponse,
 } from './resources/memories';
 import { type Fetch } from './internal/builtin-types';
 import { HeadersLike, NullableHeaders, buildHeaders } from './internal/headers';
@@ -830,7 +831,8 @@ export declare namespace XtraceMemoryManager {
     type Artifact as Artifact,
     type Episode as Episode,
     type Fact as Fact,
-    type Mem0Memory as Mem0Memory,
+    type MemoryRetrieveResponse as MemoryRetrieveResponse,
+    type MemoryUpdateResponse as MemoryUpdateResponse,
     type MemoryListResponse as MemoryListResponse,
     type MemoryDeleteResponse as MemoryDeleteResponse,
     type MemoryAddResponse as MemoryAddResponse,
@@ -841,5 +843,5 @@ export declare namespace XtraceMemoryManager {
     type MemorySearchParams as MemorySearchParams,
   };
 
-  export { Event as Event, type EventRetrieveResponse as EventRetrieveResponse };
+  export { Event as Event };
 }
