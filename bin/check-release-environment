@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 
-errors=()
+# When trusted publishing (OIDC) is enabled on npm, NPM_TOKEN is not
+# needed — `bin/publish-npm` falls back to the auto-injected
+# ACTIONS_ID_TOKEN_REQUEST_TOKEN. The Stainless default check for
+# NPM_TOKEN here is misleading in that setup, so we skip it.
 
-if [ -z "${NPM_TOKEN}" ]; then
-  errors+=("The NPM_TOKEN secret has not been set. Please set it in either this repository's secrets or your organization secrets")
-fi
+errors=()
 
 lenErrors=${#errors[@]}
 
@@ -19,4 +20,3 @@ if [[ lenErrors -gt 0 ]]; then
 fi
 
 echo "The environment is ready to push releases!"
-
