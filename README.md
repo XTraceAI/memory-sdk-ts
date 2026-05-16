@@ -26,16 +26,18 @@ The full API of this library can be found in [api.md](api.md).
 import XtraceMemoryManager from 'xtrace-memory-manager';
 
 const client = new XtraceMemoryManager({
-  apiKey: process.env['XTRACE_MEMORY_MANAGER_API_KEY'], // This is the default and can be omitted
-  orgID: process.env['XTRACE_MEMORY_MANAGER_ORG_ID'], // This is the default and can be omitted
+  apiKey: 'My API Key',
+  orgID: 'My Org ID',
   environment: 'environment_1', // defaults to 'production'
 });
 
 const memory = await client.memories.create({
-  messages: [{ content: 'I keep a daily log of every dog I see on my walks.', role: 'user' }],
+  conv_id: 'conv-2026-05-15-abc',
+  messages: [{ content: 'I like Thai food and spicy dishes.', role: 'user' }],
+  user_id: 'alice',
 });
 
-console.log(memory.job_id);
+console.log(memory.id);
 ```
 
 ### Request & Response types
@@ -47,13 +49,15 @@ This library includes TypeScript definitions for all request params and response
 import XtraceMemoryManager from 'xtrace-memory-manager';
 
 const client = new XtraceMemoryManager({
-  apiKey: process.env['XTRACE_MEMORY_MANAGER_API_KEY'], // This is the default and can be omitted
-  orgID: process.env['XTRACE_MEMORY_MANAGER_ORG_ID'], // This is the default and can be omitted
+  apiKey: 'My API Key',
+  orgID: 'My Org ID',
   environment: 'environment_1', // defaults to 'production'
 });
 
 const params: XtraceMemoryManager.MemoryCreateParams = {
-  messages: [{ content: 'I keep a daily log of every dog I see on my walks.', role: 'user' }],
+  conv_id: 'conv-2026-05-15-abc',
+  messages: [{ content: 'I like Thai food and spicy dishes.', role: 'user' }],
+  user_id: 'alice',
 };
 const memory: XtraceMemoryManager.MemoryCreateResponse = await client.memories.create(params);
 ```
@@ -70,7 +74,9 @@ a subclass of `APIError` will be thrown:
 ```ts
 const memory = await client.memories
   .create({
-    messages: [{ content: 'I keep a daily log of every dog I see on my walks.', role: 'user' }],
+    conv_id: 'conv-2026-05-15-abc',
+    messages: [{ content: 'I like Thai food and spicy dishes.', role: 'user' }],
+    user_id: 'alice',
   })
   .catch(async (err) => {
     if (err instanceof XtraceMemoryManager.APIError) {
@@ -108,11 +114,17 @@ You can use the `maxRetries` option to configure or disable this:
 ```js
 // Configure the default for all requests:
 const client = new XtraceMemoryManager({
+  apiKey: 'My API Key',
+  orgID: 'My Org ID',
   maxRetries: 0, // default is 2
 });
 
 // Or, configure per-request:
-await client.memories.create({ messages: [{ content: 'I keep a daily log of every dog I see on my walks.', role: 'user' }] }, {
+await client.memories.create({
+  conv_id: 'conv-2026-05-15-abc',
+  messages: [{ content: 'I like Thai food and spicy dishes.', role: 'user' }],
+  user_id: 'alice',
+}, {
   maxRetries: 5,
 });
 ```
@@ -125,11 +137,17 @@ Requests time out after 1 minute by default. You can configure this with a `time
 ```ts
 // Configure the default for all requests:
 const client = new XtraceMemoryManager({
+  apiKey: 'My API Key',
+  orgID: 'My Org ID',
   timeout: 20 * 1000, // 20 seconds (default is 1 minute)
 });
 
 // Override per-request:
-await client.memories.create({ messages: [{ content: 'I keep a daily log of every dog I see on my walks.', role: 'user' }] }, {
+await client.memories.create({
+  conv_id: 'conv-2026-05-15-abc',
+  messages: [{ content: 'I like Thai food and spicy dishes.', role: 'user' }],
+  user_id: 'alice',
+}, {
   timeout: 5 * 1000,
 });
 ```
@@ -154,7 +172,9 @@ const client = new XtraceMemoryManager();
 
 const response = await client.memories
   .create({
-    messages: [{ content: 'I keep a daily log of every dog I see on my walks.', role: 'user' }],
+    conv_id: 'conv-2026-05-15-abc',
+    messages: [{ content: 'I like Thai food and spicy dishes.', role: 'user' }],
+    user_id: 'alice',
   })
   .asResponse();
 console.log(response.headers.get('X-My-Header'));
@@ -162,11 +182,13 @@ console.log(response.statusText); // access the underlying Response object
 
 const { data: memory, response: raw } = await client.memories
   .create({
-    messages: [{ content: 'I keep a daily log of every dog I see on my walks.', role: 'user' }],
+    conv_id: 'conv-2026-05-15-abc',
+    messages: [{ content: 'I like Thai food and spicy dishes.', role: 'user' }],
+    user_id: 'alice',
   })
   .withResponse();
 console.log(raw.headers.get('X-My-Header'));
-console.log(memory.job_id);
+console.log(memory.id);
 ```
 
 ### Logging

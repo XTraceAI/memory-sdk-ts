@@ -1,28 +1,35 @@
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 import { APIResource } from '../core/resource';
-import * as MemoriesAPI from './memories';
 import { APIPromise } from '../core/api-promise';
-import { buildHeaders } from '../internal/headers';
 import { RequestOptions } from '../internal/request-options';
 import { path } from '../internal/utils/path';
 
 export class Memories extends APIResource {
   /**
-   * Submit one or more messages; the server extracts facts, artifacts, and episodes.
-   * **Async by default** (returns `202` with a `job_id`). Set `?wait=true` to opt
-   * into sync mode — the server holds the connection up to 30 seconds and returns
-   * the full result inline if extraction finishes in time, otherwise falls back to
-   * async.
+   * Async ingest. Returns `202 + job_id` by default.
+   *
+   * With `?wait=true` the server holds the connection up to
+   * `Settings.MEMORY_INGEST_WAIT_TIMEOUT_SECONDS` (30s default). If extraction
+   * completes within that window, the response is `200 OK` with the terminal job
+   * inline. If the deadline elapses first, the response falls back to `202 Accepted`
+   * with `status: "pending"` and the caller resumes the polling pattern against
+   * `GET /v1/memories/jobs/{job_id}`.
+   *
+   * The extraction task is spawned via `asyncio.create_task` and awaited via
+   * `asyncio.wait(timeout=…, return_when=FIRST_COMPLETED)` — `wait` doesn't cancel
+   * pending tasks on timeout, so the background extraction continues regardless of
+   * whether the wait window elapsed. Strong reference held in :data:`_pending_jobs`
+   * keeps the task from being garbage-collected.
    *
    * @example
    * ```ts
    * const memory = await client.memories.create({
+   *   conv_id: 'conv-2026-05-15-abc',
    *   messages: [
    *     {
+   *       content: 'I like Thai food and spicy dishes.',
    *       role: 'user',
-   *       content:
-   *         'I keep a daily log of every dog I see on my walks.',
    *     },
    *   ],
    *   user_id: 'alice',
@@ -35,95 +42,35 @@ export class Memories extends APIResource {
   }
 
   /**
-   * Get one memory by ID. Works for all types. Returns the **full** representation,
-   * including `details.full_content` for artifacts.
+   * List memories with flat-equality filters and cursor pagination.
    *
    * @example
    * ```ts
-   * const memory = await client.memories.retrieve(
-   *   'fact_01HXYZ123ABCDEFGHJKMNPQRSTV',
-   * );
+   * const memories = await client.memories.list();
    * ```
    */
-  retrieve(
-    id: string,
-    query: MemoryRetrieveParams | null | undefined = {},
+  list(
+    query: MemoryListParams | null | undefined = {},
     options?: RequestOptions,
-  ): APIPromise<MemoryRetrieveResponse> {
-    return this._client.get(path`/v1/memories/${id}`, { query, ...options });
-  }
-
-  /**
-   * Cannot change `type`, `user_id`, `agent_id`, `conv_id`, `created_at`. Metadata
-   * is merged, not replaced.
-   *
-   * @example
-   * ```ts
-   * const memory = await client.memories.update(
-   *   'fact_01HXYZ123ABCDEFGHJKMNPQRSTV',
-   * );
-   * ```
-   */
-  update(id: string, body: MemoryUpdateParams, options?: RequestOptions): APIPromise<Memory> {
-    return this._client.patch(path`/v1/memories/${id}`, { body, ...options });
-  }
-
-  /**
-   * List memories scoped by flat equality filters. For richer filtering (operators,
-   * AND/OR/NOT), use `POST /v1/memories/search`.
-   *
-   * @example
-   * ```ts
-   * const memoryList = await client.memories.list();
-   * ```
-   */
-  list(query: MemoryListParams | null | undefined = {}, options?: RequestOptions): APIPromise<MemoryList> {
+  ): APIPromise<MemoryListResponse> {
     return this._client.get('/v1/memories', { query, ...options });
   }
 
   /**
-   * Soft-deletes the memory: it's marked `details.status = "deleted"` and excluded
-   * from default list/search results. Permanent purge happens out-of-band per
-   * retention policy.
+   * Return the current state of an ingest job.
    *
-   * @example
-   * ```ts
-   * await client.memories.delete(
-   *   'fact_01HXYZ123ABCDEFGHJKMNPQRSTV',
-   * );
-   * ```
-   */
-  delete(id: string, options?: RequestOptions): APIPromise<void> {
-    return this._client.delete(path`/v1/memories/${id}`, {
-      ...options,
-      headers: buildHeaders([{ Accept: '*/*' }, options?.headers]),
-    });
-  }
-
-  /**
-   * Closes any open episode for the given scope and assembles a final episode
-   * memory. At least one scope field (`user_id`, `agent_id`, `conv_id`) is required.
-   *
-   * @example
-   * ```ts
-   * const response = await client.memories.flush();
-   * ```
-   */
-  flush(body: MemoryFlushParams, options?: RequestOptions): APIPromise<MemoryFlushResponse> {
-    return this._client.post('/v1/memories/flush', { body, ...options });
-  }
-
-  /**
-   * Poll the status of an ingest job. Once `status` is `succeeded` or `failed`, the
-   * job is terminal and won't change. Completed jobs are retained for 7 days.
-   *
-   * Recommended polling cadence: exponential backoff starting at 500ms, capped at
-   * 5s. Most jobs complete in 3–10s.
+   * Terminal states (`succeeded` / `failed`) are persisted in DynamoDB and remain
+   * queryable indefinitely under the current deployment (the shared usage table has
+   * no table-level TTL enabled). `result.memories_created` and
+   * `result.memories_updated` carry thin :class:`MemoryRef` entries
+   * (`{id, type, text}`) — fetch `GET /v1/memories/{id}` for the full `Memory`
+   * shape. `404 job_not_found` still fires for unknown ids and for ids that exist
+   * under a different org.
    *
    * @example
    * ```ts
    * const response = await client.memories.getJobStatus(
-   *   'job_01HXYZ123ABCDEFGHJKMNPQRSTV',
+   *   'job_id',
    * );
    * ```
    */
@@ -132,52 +79,28 @@ export class Memories extends APIResource {
   }
 
   /**
-   * Returns the fields that can be filtered on for this org, including any per-org
-   * indexed metadata keys. Use this to discover what's filterable instead of
-   * guessing.
+   * Vector + filter search over the unified memory pool.
    *
-   * @example
-   * ```ts
-   * const response = await client.memories.listFacets();
-   * ```
-   */
-  listFacets(options?: RequestOptions): APIPromise<MemoryListFacetsResponse> {
-    return this._client.get('/v1/memories/facets', options);
-  }
-
-  /**
-   * Returns the lineage of this memory over time: the supersede chain for facts, the
-   * version chain for artifacts. Episodes (which don't currently have revisions)
-   * return a single-item list containing themselves.
+   * PR 4: org-wide vector search with cross-entity filtering. No partition lookup,
+   * no precedence-based store routing — Qdrant's indexed-payload intersection drives
+   * the candidate set, vector similarity ranks within it. Filters are the standard
+   * DSL (per-field exact equality, `$in`/`$ne`/`$exists`/`$gte`/ `$lte`,
+   * `AND`/`OR`/`NOT`); `type` (or `type: {$in: [...]}`) restricts which kb_types
+   * participate. Default = all three (mixed-type results merged by raw cosine).
    *
-   * @example
-   * ```ts
-   * const memoryList = await client.memories.listRevisions(
-   *   'fact_01HXYZ123ABCDEFGHJKMNPQRSTV',
-   * );
-   * ```
-   */
-  listRevisions(id: string, options?: RequestOptions): APIPromise<MemoryList> {
-    return this._client.get(path`/v1/memories/${id}/revisions`, options);
-  }
-
-  /**
-   * Vector + filter search over the unified memory pool. Returns a flat ranked list
-   * by default; opt into composed output via the `include` array.
+   * `include` opts into composed output:
    *
-   * Supported `include` values:
-   *
-   * - `"context_prompt"` — an assembled markdown context string ready to drop into
-   *   an LLM prompt. Higher latency; metered separately.
-   * - `"full_content"` — include `details.full_content` on artifact results (no-op
-   *   for facts/episodes).
+   * - `"full_content"` — populate `details.full_content` on artifact rows (no-op for
+   *   facts/episodes).
+   * - `"context_prompt"` — run xmem's retrieval-agent pipeline; assembled markdown
+   *   lands under `extras.context_prompt`, latency breakdown under
+   *   `extras.stage_timings`. The agent pipeline is conv-scoped, so this path
+   *   requires `conv_id` in `filters`.
    *
    * @example
    * ```ts
    * const response = await client.memories.search({
-   *   filters: { user_id: 'alice' },
-   *   limit: 20,
-   *   query: 'what does the user do with dogs?',
+   *   query: 'who likes thai food?',
    * });
    * ```
    */
@@ -186,660 +109,766 @@ export class Memories extends APIResource {
   }
 }
 
-export interface BaseMemory {
+/**
+ * Unified memory resource — facts, artifacts, episodes marshal to this shape.
+ * `type` is the discriminator; `details` is the type-specific extension.
+ *
+ * The mem0-parity invariant: `text` is always a short readable preview, regardless
+ * of type (fact statement / artifact summary / episode summary).
+ */
+export interface Memory {
   /**
-   * Type-prefixed ULID.
+   * Stable UUID for this memory row.
    */
   id: string;
 
-  created_at: string;
-
-  object: 'memory';
-
   /**
-   * Short readable preview. Single source per type (no concatenation). Fact: the
-   * fact statement. Artifact: the summary. Episode: the summary.
+   * Short readable preview. For facts: the claim statement. For artifacts: a summary
+   * or title (full body lives in `details.full_content`, opt-in via
+   * `include=full_content`). For episodes: a summary of the session.
    */
   text: string;
 
+  /**
+   * Memory subtype. `fact` = a single semantic claim extracted from a turn;
+   * `artifact` = a structured object (code, doc, image) referenced by the
+   * conversation; `episode` = a session-scoped summary of a stretch of turns.
+   */
   type: 'fact' | 'artifact' | 'episode';
 
-  updated_at: string;
-
+  /**
+   * Agent scope, if any.
+   */
   agent_id?: string | null;
 
+  /**
+   * App scope, if any.
+   */
+  app_id?: string | null;
+
+  /**
+   * Optional category labels from xmem's extraction pipeline.
+   */
+  categories?: Array<string>;
+
+  /**
+   * Conversation anchor.
+   */
   conv_id?: string | null;
 
   /**
-   * User-supplied + system-derived.
+   * ISO-8601 timestamp of original ingest.
+   */
+  created_at?: unknown;
+
+  /**
+   * Type-specific extension. Shape depends on `type` — see `FactDetails` /
+   * `ArtifactDetails` / `EpisodeDetails` schemas. Always an object; never null.
+   */
+  details?: Memory.FactDetails | Memory.ArtifactDetails | Memory.EpisodeDetails;
+
+  /**
+   * Free-form customer-supplied metadata that was on the row at write time. Each key
+   * here is independently indexed and filterable on search.
    */
   metadata?: { [key: string]: unknown };
 
+  /**
+   * Constant discriminator for the resource type.
+   */
+  object?: 'memory';
+
+  /**
+   * Vector-similarity score. Present **only** on search responses; null on list /
+   * get-by-id / patch / ingest result rows.
+   */
+  score?: number | null;
+
+  /**
+   * ISO-8601 timestamp of the last metadata patch / supersede.
+   */
+  updated_at?: unknown;
+
+  /**
+   * User scope this row belongs to.
+   */
   user_id?: string | null;
 }
 
-/**
- * Polymorphic memory object. Use `type` to discriminate.
- */
-export type Memory = Memory.FactMemory | Memory.ArtifactMemory | Memory.EpisodeMemory;
-
 export namespace Memory {
-  export interface FactMemory extends Omit<MemoriesAPI.BaseMemory, 'type'> {
-    /**
-     * Type-prefixed ULID.
-     */
-    id: string;
-
-    details: FactMemory.Details;
-
-    type: 'fact';
-  }
-
-  export namespace FactMemory {
-    export interface Details {
-      /**
-       * Artifacts that cite this fact (inverse, computed).
-       */
-      artifact_ids?: Array<string>;
-
-      episode_id?: string;
-
-      /**
-       * e.g. `context`, `preference`, `event`.
-       */
-      fact_type?: string | null;
-
-      /**
-       * Populated on search responses; null otherwise.
-       */
-      score?: number | null;
-
-      /**
-       * Artifact this fact was extracted from, if any.
-       */
-      source_artifact_id?: string;
-
-      /**
-       * Raw events this fact was extracted from.
-       */
-      source_event_ids?: Array<string>;
-
-      source_role?: 'user' | 'assistant' | 'system' | null;
-
-      status?: 'active' | 'superseded' | 'deleted';
-
-      /**
-       * ID of the previous revision of this fact, or null.
-       */
-      supersedes?: string;
-    }
-  }
-
-  export interface ArtifactMemory extends Omit<MemoriesAPI.BaseMemory, 'type'> {
-    /**
-     * Type-prefixed ULID.
-     */
-    id: string;
-
-    details: ArtifactMemory.Details;
-
-    type: 'artifact';
-  }
-
-  export namespace ArtifactMemory {
-    export interface Details {
-      episode_ids?: Array<string>;
-
-      /**
-       * Heavy field — the full artifact content (HTML, markdown, etc.). **Omitted in
-       * list/search responses by default.** Present on `GET /v1/memories/{id}`, or when
-       * `include` contains `"full_content"`.
-       */
-      full_content?: string | null;
-
-      /**
-       * Why this artifact exists.
-       */
-      rationale?: string | null;
-
-      /**
-       * ID of v1 of this artifact.
-       */
-      root_id?: string;
-
-      score?: number | null;
-
-      /**
-       * Facts that contributed to this artifact. (Storage layer field name:
-       * `descriptor_fact_ids`.)
-       */
-      source_fact_ids?: Array<string>;
-
-      /**
-       * Short human-readable label.
-       */
-      title?: string | null;
-
-      version?: number;
-    }
-  }
-
-  export interface EpisodeMemory extends Omit<MemoriesAPI.BaseMemory, 'type'> {
-    /**
-     * Type-prefixed ULID.
-     */
-    id: string;
-
-    details: EpisodeMemory.Details;
-
-    type: 'episode';
-  }
-
-  export namespace EpisodeMemory {
-    export interface Details {
-      artifact_ids?: Array<string>;
-
-      ended_at?: string;
-
-      fact_ids?: Array<string>;
-
-      score?: number | null;
-
-      started_at?: string;
-
-      /**
-       * Short human-readable label.
-       */
-      title?: string | null;
-    }
-  }
-}
-
-export interface MemoryList {
-  data: Array<Memory>;
-
-  has_more: boolean;
-
-  object: 'list';
-
   /**
-   * Pass as `cursor` on the next call. `null` when `has_more` is false.
+   * Per-row fact details — sits under `Memory.details` when `Memory.type == "fact"`.
+   * Mirrors the SoT shape, not xmem's raw `Fact` shape: e.g. xmem's
+   * `source_artifact_id` → `artifact_id`.
    */
-  next_cursor?: string | null;
-}
+  export interface FactDetails {
+    artifact_id?: string | null;
 
-/**
- * Sync mode result — returned when `?wait=true` and extraction completed within
- * the 30s wait budget.
- */
-export interface MemoryCreateResponse {
-  /**
-   * Included for traceability — the underlying job ID even in sync mode.
-   */
-  job_id: string;
+    artifact_ids?: Array<string>;
 
-  memories_created: Array<Memory>;
+    episode_id?: string | null;
 
-  object: 'ingest_result';
+    fact_type?: string | null;
 
-  memories_superseded_by?: { [key: string]: string };
+    source_event_ids?: Array<string>;
 
-  stage_timings?: { [key: string]: number };
-}
+    source_role?: string | null;
 
-/**
- * A `Memory` augmented with an optional `expanded` block. Returned from
- * `GET /v1/memories/{id}` when the caller used `?expand=…`. The expanded objects
- * themselves are plain `Memory` values (no further nesting allowed by the API),
- * keeping the type bounded.
- */
-export type MemoryRetrieveResponse =
-  | MemoryRetrieveResponse.UnionMember0
-  | MemoryRetrieveResponse.UnionMember1
-  | MemoryRetrieveResponse.UnionMember2;
+    status?: string | null;
 
-export namespace MemoryRetrieveResponse {
-  export interface UnionMember0 extends Omit<MemoriesAPI.BaseMemory, 'type'> {
-    /**
-     * Type-prefixed ULID.
-     */
-    id: string;
+    supersedes?: string | null;
 
-    details: UnionMember0.Details;
-
-    type: 'fact';
-
-    /**
-     * Present only when the request used `?expand=…`. Keys are expansion targets (e.g.
-     * `source_facts`, `episodes`); values are arrays of the related `Memory` objects.
-     */
-    expanded?: { [key: string]: Array<MemoriesAPI.Memory> };
-  }
-
-  export namespace UnionMember0 {
-    export interface Details {
-      /**
-       * Artifacts that cite this fact (inverse, computed).
-       */
-      artifact_ids?: Array<string>;
-
-      episode_id?: string;
-
-      /**
-       * e.g. `context`, `preference`, `event`.
-       */
-      fact_type?: string | null;
-
-      /**
-       * Populated on search responses; null otherwise.
-       */
-      score?: number | null;
-
-      /**
-       * Artifact this fact was extracted from, if any.
-       */
-      source_artifact_id?: string;
-
-      /**
-       * Raw events this fact was extracted from.
-       */
-      source_event_ids?: Array<string>;
-
-      source_role?: 'user' | 'assistant' | 'system' | null;
-
-      status?: 'active' | 'superseded' | 'deleted';
-
-      /**
-       * ID of the previous revision of this fact, or null.
-       */
-      supersedes?: string;
-    }
-  }
-
-  export interface UnionMember1 extends Omit<MemoriesAPI.BaseMemory, 'type'> {
-    /**
-     * Type-prefixed ULID.
-     */
-    id: string;
-
-    details: UnionMember1.Details;
-
-    type: 'artifact';
-
-    /**
-     * Present only when the request used `?expand=…`. Keys are expansion targets (e.g.
-     * `source_facts`, `episodes`); values are arrays of the related `Memory` objects.
-     */
-    expanded?: { [key: string]: Array<MemoriesAPI.Memory> };
-  }
-
-  export namespace UnionMember1 {
-    export interface Details {
-      episode_ids?: Array<string>;
-
-      /**
-       * Heavy field — the full artifact content (HTML, markdown, etc.). **Omitted in
-       * list/search responses by default.** Present on `GET /v1/memories/{id}`, or when
-       * `include` contains `"full_content"`.
-       */
-      full_content?: string | null;
-
-      /**
-       * Why this artifact exists.
-       */
-      rationale?: string | null;
-
-      /**
-       * ID of v1 of this artifact.
-       */
-      root_id?: string;
-
-      score?: number | null;
-
-      /**
-       * Facts that contributed to this artifact. (Storage layer field name:
-       * `descriptor_fact_ids`.)
-       */
-      source_fact_ids?: Array<string>;
-
-      /**
-       * Short human-readable label.
-       */
-      title?: string | null;
-
-      version?: number;
-    }
-  }
-
-  export interface UnionMember2 extends Omit<MemoriesAPI.BaseMemory, 'type'> {
-    /**
-     * Type-prefixed ULID.
-     */
-    id: string;
-
-    details: UnionMember2.Details;
-
-    type: 'episode';
-
-    /**
-     * Present only when the request used `?expand=…`. Keys are expansion targets (e.g.
-     * `source_facts`, `episodes`); values are arrays of the related `Memory` objects.
-     */
-    expanded?: { [key: string]: Array<MemoriesAPI.Memory> };
-  }
-
-  export namespace UnionMember2 {
-    export interface Details {
-      artifact_ids?: Array<string>;
-
-      ended_at?: string;
-
-      fact_ids?: Array<string>;
-
-      score?: number | null;
-
-      started_at?: string;
-
-      /**
-       * Short human-readable label.
-       */
-      title?: string | null;
-    }
-  }
-}
-
-export interface MemoryFlushResponse {
-  /**
-   * All freshly-minted episodes (type=`episode`).
-   */
-  episodes_created: Array<Memory>;
-
-  object: 'flush_result';
-}
-
-export interface MemoryGetJobStatusResponse {
-  created_at: string;
-
-  job_id: string;
-
-  object: 'ingest_job';
-
-  /**
-   * `pending` and `processing` are non-terminal. `succeeded` and `failed` are
-   * terminal.
-   */
-  status: 'pending' | 'processing' | 'succeeded' | 'failed';
-
-  /**
-   * Set when `status` becomes terminal (`succeeded` or `failed`).
-   */
-  completed_at?: string;
-
-  /**
-   * Populated only when `status == "failed"`.
-   */
-  error?: MemoryGetJobStatusResponse.Error | null;
-
-  /**
-   * Populated only when `status == "succeeded"`.
-   */
-  result?: MemoryGetJobStatusResponse.Result;
-
-  /**
-   * Convenience: polling URL for this job.
-   */
-  url?: string;
-}
-
-export namespace MemoryGetJobStatusResponse {
-  /**
-   * Populated only when `status == "failed"`.
-   */
-  export interface Error {
-    code: string;
-
-    message: string;
+    [k: string]: unknown;
   }
 
   /**
-   * Populated only when `status == "succeeded"`.
+   * Per-row artifact details under `Memory.details` when
+   * `Memory.type == "artifact"`.
+   *
+   * Wire-field renames vs xmem's `Artifact` schema:
+   *
+   * - `Artifact.name` → `details.title`
+   * - `Artifact.descriptor_fact_ids` → `details.source_fact_ids`
+   * - `Artifact.root_artifact_id` → `details.root_id`
+   *
+   * `full_content` is opt-in — omitted on list/search by default, included on
+   * `GET /v1/memories/{id}` and when `include=["full_content"]` is set on
+   * list/search.
    */
-  export interface Result {
-    memories_created?: Array<MemoriesAPI.Memory>;
+  export interface ArtifactDetails {
+    episode_ids?: Array<string>;
 
-    /**
-     * Map of old_id → new_id when supersedes happen during ingest.
-     */
-    memories_superseded_by?: { [key: string]: string };
+    full_content?: string | null;
 
-    /**
-     * Seconds per pipeline stage.
-     */
-    stage_timings?: { [key: string]: number };
+    rationale?: string | null;
+
+    root_id?: string | null;
+
+    source_fact_ids?: Array<string>;
+
+    title?: string | null;
+
+    version?: number | null;
+
+    [k: string]: unknown;
   }
-}
-
-export interface MemoryListFacetsResponse {
-  fields: Array<MemoryListFacetsResponse.Field>;
-
-  object: 'facets';
-}
-
-export namespace MemoryListFacetsResponse {
-  export interface Field {
-    /**
-     * True for built-in fields. False for org-specific promoted metadata keys.
-     */
-    core: boolean;
-
-    /**
-     * True when filtering on this field uses an index (fast). False = post-filter
-     * scan.
-     */
-    indexed: boolean;
-
-    /**
-     * Field path. Top-level for built-ins, `metadata.<key>` for promoted custom keys.
-     */
-    name: string;
-
-    type: 'string' | 'enum' | 'datetime' | 'number' | 'boolean';
-
-    /**
-     * Present for `enum` fields.
-     */
-    values?: Array<string>;
-  }
-}
-
-export interface MemorySearchResponse {
-  data: Array<Memory>;
-
-  has_more: boolean;
-
-  object: 'list';
 
   /**
-   * Present only when the request set `include`. Each key corresponds to an opt-in
-   * feature.
+   * Per-row episode details under `Memory.details` when `Memory.type == "episode"`.
    */
-  extras?: MemorySearchResponse.Extras;
+  export interface EpisodeDetails {
+    artifact_ids?: Array<string>;
 
-  next_cursor?: string | null;
-}
+    ended_at?: string | null;
 
-export namespace MemorySearchResponse {
-  /**
-   * Present only when the request set `include`. Each key corresponds to an opt-in
-   * feature.
-   */
-  export interface Extras {
-    /**
-     * Assembled markdown context, ready to drop into an LLM prompt. Present when
-     * `include` contained `"context_prompt"`.
-     */
-    context_prompt?: string;
+    fact_ids?: Array<string>;
+
+    started_at?: string | null;
+
+    title?: string | null;
 
     [k: string]: unknown;
   }
 }
 
+/**
+ * Returned by `POST /v1/memories` (with status 202 by default, 200 when
+ * `?wait=true` succeeds inline) and by `GET /v1/memories/jobs/{job_id}`. Same wire
+ * shape across every read of a job's lifecycle.
+ */
+export interface MemoryCreateResponse {
+  /**
+   * Opaque job id of the form `job_<32-hex-chars>`.
+   */
+  id: string;
+
+  /**
+   * ISO-8601 timestamp the job was created.
+   */
+  created_at: string;
+
+  /**
+   * Lifecycle state. `pending` → enqueued. `running` → extraction in progress.
+   * `succeeded` → `result` is set. `failed` → `error` is set. Terminal jobs
+   * (`succeeded` / `failed`) are retained for 24h before TTL sweep returns 404
+   * `job_not_found`.
+   */
+  status: 'pending' | 'running' | 'succeeded' | 'failed';
+
+  /**
+   * Populated when `status = failed`; null otherwise.
+   */
+  error?: MemoryCreateResponse.Error | null;
+
+  /**
+   * Constant discriminator for the resource type.
+   */
+  object?: 'ingest_job';
+
+  /**
+   * Populated when `status = succeeded`; null otherwise.
+   */
+  result?: MemoryCreateResponse.Result | null;
+
+  /**
+   * ISO-8601 timestamp of the most recent state transition.
+   */
+  updated_at?: unknown;
+}
+
+export namespace MemoryCreateResponse {
+  /**
+   * Populated when `status = failed`; null otherwise.
+   */
+  export interface Error {
+    /**
+     * Stable error code; switch on this rather than the message. Typically
+     * `ingest_failed`.
+     */
+    code: string;
+
+    /**
+     * Human-readable, sanitized summary. Safe to log; not safe to switch on.
+     */
+    message: string;
+
+    /**
+     * Error class — typically `"server_error"` for ingest failures.
+     */
+    type: string;
+  }
+
+  /**
+   * Populated when `status = succeeded`; null otherwise.
+   */
+  export interface Result {
+    /**
+     * Thin references to new facts / episodes / artifacts written this ingest. Each
+     * entry is `{id, type, text}`; full row shape is at `GET /v1/memories/{id}`.
+     */
+    memories_created?: Array<Result.MemoriesCreated>;
+
+    /**
+     * Map of `old_fact_id → new_fact_id`. Populated when the extraction pipeline
+     * detects a contradiction with an existing active fact: the old fact's `tag2`
+     * flips to superseded and the new fact records `supersedes = old_id`.
+     */
+    memories_superseded_by?: { [key: string]: string };
+
+    /**
+     * Thin references to existing rows whose payload was updated during this ingest
+     * (e.g. artifact dedup hits).
+     */
+    memories_updated?: Array<Result.MemoriesUpdated>;
+
+    /**
+     * Constant discriminator for the resource type.
+     */
+    object?: 'ingest_result';
+
+    /**
+     * Per-stage extraction latencies (seconds).
+     */
+    stage_timings?: { [key: string]: number };
+  }
+
+  export namespace Result {
+    /**
+     * Thin reference to a memory row written or updated by an ingest job. Carries only
+     * what a client needs for confirmation / per-type routing; the full `Memory` shape
+     * (entity ids, metadata, details, timestamps, categories) is one
+     * `GET /v1/memories/{id}` away.
+     *
+     * Trade-off rationale: storing the full `Memory` shape inside the DDB job row
+     * duplicates content that already lives in Qdrant — every field except `id` is
+     * derivable via the read endpoints. The thin shape keeps the row small while
+     * preserving the two fields that make a poll response useful on its own: `type`
+     * (lets clients route per memory subtype without a follow-up) and `text` (the
+     * human-readable preview, makes the result usable as a confirmation receipt).
+     */
+    export interface MemoriesCreated {
+      /**
+       * Stable UUID of the written / updated row.
+       */
+      id: string;
+
+      /**
+       * Short readable preview as captured at write time. Same value as `Memory.text` on
+       * the row at the moment of ingest. **Snapshot, not live state** — a subsequent
+       * supersede (text PATCH) replaces the row's current text; the value here keeps
+       * reflecting what the ingest job wrote. Fetch `GET /v1/memories/{id}` for current
+       * state.
+       */
+      text: string;
+
+      /**
+       * Memory subtype. Determines which detail variant lives behind the id when fetched
+       * via `GET /v1/memories/{id}`.
+       */
+      type: 'fact' | 'artifact' | 'episode';
+    }
+
+    /**
+     * Thin reference to a memory row written or updated by an ingest job. Carries only
+     * what a client needs for confirmation / per-type routing; the full `Memory` shape
+     * (entity ids, metadata, details, timestamps, categories) is one
+     * `GET /v1/memories/{id}` away.
+     *
+     * Trade-off rationale: storing the full `Memory` shape inside the DDB job row
+     * duplicates content that already lives in Qdrant — every field except `id` is
+     * derivable via the read endpoints. The thin shape keeps the row small while
+     * preserving the two fields that make a poll response useful on its own: `type`
+     * (lets clients route per memory subtype without a follow-up) and `text` (the
+     * human-readable preview, makes the result usable as a confirmation receipt).
+     */
+    export interface MemoriesUpdated {
+      /**
+       * Stable UUID of the written / updated row.
+       */
+      id: string;
+
+      /**
+       * Short readable preview as captured at write time. Same value as `Memory.text` on
+       * the row at the moment of ingest. **Snapshot, not live state** — a subsequent
+       * supersede (text PATCH) replaces the row's current text; the value here keeps
+       * reflecting what the ingest job wrote. Fetch `GET /v1/memories/{id}` for current
+       * state.
+       */
+      text: string;
+
+      /**
+       * Memory subtype. Determines which detail variant lives behind the id when fetched
+       * via `GET /v1/memories/{id}`.
+       */
+      type: 'fact' | 'artifact' | 'episode';
+    }
+  }
+}
+
+/**
+ * Stripe-style list envelope used by `GET /v1/memories`,
+ * `GET /v1/memories/{id}/revisions`, and the default search response.
+ */
+export interface MemoryListResponse {
+  /**
+   * Page of memory rows.
+   */
+  data?: Array<Memory>;
+
+  /**
+   * True if more rows exist beyond this page; use `next_cursor` to fetch them.
+   */
+  has_more?: boolean;
+
+  /**
+   * Opaque cursor for the next page. Null on the final page. Tenant-scoped: only
+   * usable with the same `(org, key)` that produced it.
+   */
+  next_cursor?: string | null;
+
+  /**
+   * Constant discriminator for the resource type.
+   */
+  object?: 'list';
+}
+
+/**
+ * Returned by `POST /v1/memories` (with status 202 by default, 200 when
+ * `?wait=true` succeeds inline) and by `GET /v1/memories/jobs/{job_id}`. Same wire
+ * shape across every read of a job's lifecycle.
+ */
+export interface MemoryGetJobStatusResponse {
+  /**
+   * Opaque job id of the form `job_<32-hex-chars>`.
+   */
+  id: string;
+
+  /**
+   * ISO-8601 timestamp the job was created.
+   */
+  created_at: string;
+
+  /**
+   * Lifecycle state. `pending` → enqueued. `running` → extraction in progress.
+   * `succeeded` → `result` is set. `failed` → `error` is set. Terminal jobs
+   * (`succeeded` / `failed`) are retained for 24h before TTL sweep returns 404
+   * `job_not_found`.
+   */
+  status: 'pending' | 'running' | 'succeeded' | 'failed';
+
+  /**
+   * Populated when `status = failed`; null otherwise.
+   */
+  error?: MemoryGetJobStatusResponse.Error | null;
+
+  /**
+   * Constant discriminator for the resource type.
+   */
+  object?: 'ingest_job';
+
+  /**
+   * Populated when `status = succeeded`; null otherwise.
+   */
+  result?: MemoryGetJobStatusResponse.Result | null;
+
+  /**
+   * ISO-8601 timestamp of the most recent state transition.
+   */
+  updated_at?: unknown;
+}
+
+export namespace MemoryGetJobStatusResponse {
+  /**
+   * Populated when `status = failed`; null otherwise.
+   */
+  export interface Error {
+    /**
+     * Stable error code; switch on this rather than the message. Typically
+     * `ingest_failed`.
+     */
+    code: string;
+
+    /**
+     * Human-readable, sanitized summary. Safe to log; not safe to switch on.
+     */
+    message: string;
+
+    /**
+     * Error class — typically `"server_error"` for ingest failures.
+     */
+    type: string;
+  }
+
+  /**
+   * Populated when `status = succeeded`; null otherwise.
+   */
+  export interface Result {
+    /**
+     * Thin references to new facts / episodes / artifacts written this ingest. Each
+     * entry is `{id, type, text}`; full row shape is at `GET /v1/memories/{id}`.
+     */
+    memories_created?: Array<Result.MemoriesCreated>;
+
+    /**
+     * Map of `old_fact_id → new_fact_id`. Populated when the extraction pipeline
+     * detects a contradiction with an existing active fact: the old fact's `tag2`
+     * flips to superseded and the new fact records `supersedes = old_id`.
+     */
+    memories_superseded_by?: { [key: string]: string };
+
+    /**
+     * Thin references to existing rows whose payload was updated during this ingest
+     * (e.g. artifact dedup hits).
+     */
+    memories_updated?: Array<Result.MemoriesUpdated>;
+
+    /**
+     * Constant discriminator for the resource type.
+     */
+    object?: 'ingest_result';
+
+    /**
+     * Per-stage extraction latencies (seconds).
+     */
+    stage_timings?: { [key: string]: number };
+  }
+
+  export namespace Result {
+    /**
+     * Thin reference to a memory row written or updated by an ingest job. Carries only
+     * what a client needs for confirmation / per-type routing; the full `Memory` shape
+     * (entity ids, metadata, details, timestamps, categories) is one
+     * `GET /v1/memories/{id}` away.
+     *
+     * Trade-off rationale: storing the full `Memory` shape inside the DDB job row
+     * duplicates content that already lives in Qdrant — every field except `id` is
+     * derivable via the read endpoints. The thin shape keeps the row small while
+     * preserving the two fields that make a poll response useful on its own: `type`
+     * (lets clients route per memory subtype without a follow-up) and `text` (the
+     * human-readable preview, makes the result usable as a confirmation receipt).
+     */
+    export interface MemoriesCreated {
+      /**
+       * Stable UUID of the written / updated row.
+       */
+      id: string;
+
+      /**
+       * Short readable preview as captured at write time. Same value as `Memory.text` on
+       * the row at the moment of ingest. **Snapshot, not live state** — a subsequent
+       * supersede (text PATCH) replaces the row's current text; the value here keeps
+       * reflecting what the ingest job wrote. Fetch `GET /v1/memories/{id}` for current
+       * state.
+       */
+      text: string;
+
+      /**
+       * Memory subtype. Determines which detail variant lives behind the id when fetched
+       * via `GET /v1/memories/{id}`.
+       */
+      type: 'fact' | 'artifact' | 'episode';
+    }
+
+    /**
+     * Thin reference to a memory row written or updated by an ingest job. Carries only
+     * what a client needs for confirmation / per-type routing; the full `Memory` shape
+     * (entity ids, metadata, details, timestamps, categories) is one
+     * `GET /v1/memories/{id}` away.
+     *
+     * Trade-off rationale: storing the full `Memory` shape inside the DDB job row
+     * duplicates content that already lives in Qdrant — every field except `id` is
+     * derivable via the read endpoints. The thin shape keeps the row small while
+     * preserving the two fields that make a poll response useful on its own: `type`
+     * (lets clients route per memory subtype without a follow-up) and `text` (the
+     * human-readable preview, makes the result usable as a confirmation receipt).
+     */
+    export interface MemoriesUpdated {
+      /**
+       * Stable UUID of the written / updated row.
+       */
+      id: string;
+
+      /**
+       * Short readable preview as captured at write time. Same value as `Memory.text` on
+       * the row at the moment of ingest. **Snapshot, not live state** — a subsequent
+       * supersede (text PATCH) replaces the row's current text; the value here keeps
+       * reflecting what the ingest job wrote. Fetch `GET /v1/memories/{id}` for current
+       * state.
+       */
+      text: string;
+
+      /**
+       * Memory subtype. Determines which detail variant lives behind the id when fetched
+       * via `GET /v1/memories/{id}`.
+       */
+      type: 'fact' | 'artifact' | 'episode';
+    }
+  }
+}
+
+/**
+ * Search response — list envelope + optional `extras` block.
+ */
+export interface MemorySearchResponse {
+  /**
+   * Ranked rows. Mixed kb_types are merged by raw cosine; `score` carries the
+   * similarity value.
+   */
+  data?: Array<Memory>;
+
+  /**
+   * Populated only when `include` opts in. `null` on a default search response.
+   */
+  extras?: MemorySearchResponse.Extras | null;
+
+  has_more?: boolean;
+
+  next_cursor?: string | null;
+
+  /**
+   * Constant discriminator for the resource type.
+   */
+  object?: 'list';
+}
+
+export namespace MemorySearchResponse {
+  /**
+   * Populated only when `include` opts in. `null` on a default search response.
+   */
+  export interface Extras {
+    /**
+     * Assembled markdown context block from xmem's retrieval agent. Populated only
+     * when `include` contained `context_prompt`; null otherwise.
+     */
+    context_prompt?: string | null;
+
+    /**
+     * Per-stage retrieval-pipeline latencies (seconds).
+     */
+    stage_timings?: { [key: string]: number };
+  }
+}
+
 export interface MemoryCreateParams {
   /**
-   * Body param: One or more messages. Any role mix. No pairing requirement.
+   * Body param: Conversation identifier. REQUIRED. Anchors every extracted memory to
+   * a conversation for replay, export, and bulk retract.
+   */
+  conv_id: string;
+
+  /**
+   * Body param: Chat-style turns to extract memories from. Must be non-empty — an
+   * empty list returns 400 `invalid_messages` (the route raises this explicitly so
+   * the wire error carries the stable code rather than a generic Pydantic validation
+   * message). Server picks live vs batch extraction by length; no client-facing
+   * strategy hint.
    */
   messages: Array<MemoryCreateParams.Message>;
 
   /**
-   * Query param: If true, hold the connection up to 30s and return the full result
-   * inline when extraction completes. Falls back to `202 + job_id` if the budget
-   * elapses.
+   * Body param: User identifier. REQUIRED. Keys the per-user session namespace so a
+   * user's facts accumulate across their conversations rather than fragmenting
+   * per-conv. Also stored as an indexed filter axis on every row.
+   */
+  user_id: string;
+
+  /**
+   * Query param: When true, hold the connection up to ~30s waiting for extraction to
+   * terminate. Returns 200 + terminal job inline on success; falls back to 202 +
+   * `pending` on timeout. Default false → 202 + pending immediately.
    */
   wait?: boolean;
 
   /**
-   * Body param: Free-form agent identifier. Optional.
+   * Body param: Optional agent scope. Indexed alongside the other entity ids.
    */
-  agent_id?: string;
+  agent_id?: string | null;
 
   /**
-   * Body param: Free-form conversation identifier. Optional.
+   * Body param: Optional app scope. Indexed alongside the other entity ids.
    */
-  conv_id?: string;
+  app_id?: string | null;
 
   /**
-   * Body param: Caller-supplied metadata stored verbatim on derived memories.
+   * Body param: When true, run the artifact-extraction stage in addition to fact +
+   * episode extraction. Off by default — most expensive stage and most callers don't
+   * need it. Setting this routes the request through the batch extraction path
+   * regardless of message count.
    */
-  metadata?: { [key: string]: unknown };
+  extract_artifacts?: boolean;
 
   /**
-   * Body param: Free-form user identifier. Optional.
+   * Body param: Free-form customer metadata. Each key lands as its own indexed
+   * payload key, filterable on search. Reserved internal keys (`tag1`-`tag5`,
+   * `kb_type`, `org_id`, etc.) are stripped silently — see the `reserved_field`
+   * PATCH error for the list.
    */
-  user_id?: string;
+  metadata?: { [key: string]: unknown } | null;
 }
 
 export namespace MemoryCreateParams {
+  /**
+   * One chat-style turn in an ingest payload. Order matters: facts and episodes are
+   * extracted by walking adjacent user→assistant pairs (the live path) or the full
+   * sequence (the batch path).
+   */
   export interface Message {
+    /**
+     * Message text content.
+     */
     content: string;
 
-    role: 'user' | 'assistant' | 'system';
+    /**
+     * Speaker role: typically `"user"` or `"assistant"`.
+     */
+    role: string;
 
     /**
-     * Optional event timestamp.
+     * Optional ISO-8601 timestamp for the turn. Used by the batch ingest path when
+     * provided; ignored by the live path.
      */
-    date?: string;
+    date?: unknown;
 
     /**
-     * Optional client-supplied event ID for traceability.
+     * Optional client-supplied per-turn id (carried for trace/eval pipelines).
      */
-    dia_id?: string;
+    dia_id?: string | null;
   }
 }
 
-export interface MemoryRetrieveParams {
-  /**
-   * Comma-separated relation keys to expand inline (e.g. `source_facts,episodes`).
-   * `*` expands every applicable relation for the entity's type. See API doc →
-   * Relations and expansion.
-   */
-  expand?: string;
-}
-
-export interface MemoryUpdateParams {
-  /**
-   * Merged into existing metadata (not replaced).
-   */
-  metadata?: { [key: string]: unknown };
-
-  /**
-   * New preview text. Cannot change `type` or identity fields.
-   */
-  text?: string;
-}
-
 export interface MemoryListParams {
-  agent_id?: string;
-
-  conv_id?: string;
+  /**
+   * Filter by agent_id (exact match).
+   */
+  agent_id?: string | null;
 
   /**
-   * Opaque cursor from a previous response's `next_cursor`.
+   * Filter by app_id (exact match).
    */
-  cursor?: string;
+  app_id?: string | null;
 
   /**
-   * Comma-separated list of opt-in extras. `full_content` adds
-   * `details.full_content` to artifact results (omitted by default to keep list
-   * payloads small).
+   * Filter by conv_id (exact match).
    */
-  include?: string;
+  conv_id?: string | null;
 
-  limit?: number;
-
-  order?: 'created_at_desc' | 'created_at_asc';
-
-  type?: 'fact' | 'artifact' | 'episode';
-
-  user_id?: string;
-}
-
-export interface MemoryFlushParams {
-  agent_id?: string;
-
-  conv_id?: string;
-
-  user_id?: string;
-}
-
-export interface MemorySearchParams {
+  /**
+   * Opaque pagination cursor from a previous response's `next_cursor`. Must match
+   * this request's `order` and the issuing org (mismatch → 422 `cursor_mismatch`).
+   */
   cursor?: string | null;
 
   /**
-   * Filter DSL. Supports flat equality (`{"user_id": "alice"}`), operators
-   * (`{"score": {"$gte": 0.8}}`), and logical composition (`{"AND": [...]}`,
-   * `{"OR": [...]}`, `{"NOT": {...}}`).
-   *
-   * Supported operators: `$eq`, `$ne`, `$in`, `$nin`, `$gt`, `$gte`, `$lt`, `$lte`,
-   * `$contains`, `$icontains`, `$exists`.
-   *
-   * The schema is intentionally permissive (`additionalProperties: true`) because
-   * the value shape varies per operator. See the API doc → Filter DSL for the full
-   * grammar.
+   * Comma-separated opt-in extras. Currently only `full_content` is supported
+   * (populates `details.full_content` on artifact rows).
+   */
+  include?: string | null;
+
+  /**
+   * Maximum rows per page. 1–100, default 50.
+   */
+  limit?: number;
+
+  /**
+   * Sort order on `(created_at, id)`.
+   */
+  order?: 'created_at_desc' | 'created_at_asc';
+
+  /**
+   * Restrict results to one memory subtype. Default: all three.
+   */
+  type?: 'fact' | 'artifact' | 'episode' | null;
+
+  /**
+   * Filter by user_id (exact match). Combine with other entity params for AND.
+   */
+  user_id?: string | null;
+}
+
+export interface MemorySearchParams {
+  /**
+   * Natural-language query text. Embedded server-side; cosine-similarity-ranked.
+   */
+  query: string;
+
+  /**
+   * Opaque pagination cursor from a previous response's `next_cursor`. Tenant-scoped
+   * — using one from another org returns 422 `cursor_mismatch`.
+   */
+  cursor?: string | null;
+
+  /**
+   * Filter DSL. Top-level keys are implicit-AND. Supported operators on per-field
+   * values: bare value, `null`, `$eq`, `$ne`, `$in`, `$nin`, `$exists`,
+   * `$gt`/`$gte`/`$lt`/`$lte`, `$between`. Boolean composition: `AND` / `OR` /
+   * `NOT`. `type` (string or `$in` list) restricts which kb_types are scanned
+   * (default = all three).
    */
   filters?: { [key: string]: unknown };
 
   /**
-   * Opt-in output features. `context_prompt` adds an `extras.context_prompt`
-   * markdown block. `full_content` includes `details.full_content` on artifact
-   * results.
+   * Opt-in extras. `full_content` populates `details.full_content` on artifact rows
+   * (no-op for facts/episodes). `context_prompt` runs xmem's retrieval-agent
+   * pipeline; the assembled markdown lands under `extras.context_prompt` and
+   * requires both `user_id` and `conv_id` in `filters`.
    */
-  include?: Array<'context_prompt' | 'full_content'>;
-
-  limit?: number;
+  include?: Array<'full_content' | 'context_prompt'>;
 
   /**
-   * Natural language query, vector-embedded server-side. May be omitted for
-   * pure-filter searches.
+   * Maximum rows to return. 1–100, default 20.
    */
-  query?: string | null;
+  limit?: number;
 }
 
 export declare namespace Memories {
   export {
-    type BaseMemory as BaseMemory,
     type Memory as Memory,
-    type MemoryList as MemoryList,
     type MemoryCreateResponse as MemoryCreateResponse,
-    type MemoryRetrieveResponse as MemoryRetrieveResponse,
-    type MemoryFlushResponse as MemoryFlushResponse,
+    type MemoryListResponse as MemoryListResponse,
     type MemoryGetJobStatusResponse as MemoryGetJobStatusResponse,
-    type MemoryListFacetsResponse as MemoryListFacetsResponse,
     type MemorySearchResponse as MemorySearchResponse,
     type MemoryCreateParams as MemoryCreateParams,
-    type MemoryRetrieveParams as MemoryRetrieveParams,
-    type MemoryUpdateParams as MemoryUpdateParams,
     type MemoryListParams as MemoryListParams,
-    type MemoryFlushParams as MemoryFlushParams,
     type MemorySearchParams as MemorySearchParams,
   };
 }

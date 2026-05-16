@@ -110,8 +110,7 @@ export const formatRequestDetails = (details: {
             name.toLowerCase() === 'api-key' ||
             name.toLowerCase() === 'x-api-key' ||
             name.toLowerCase() === 'cookie' ||
-            name.toLowerCase() === 'set-cookie' ||
-            name.toLowerCase() === 'x-org-id'
+            name.toLowerCase() === 'set-cookie'
           ) ?
             '***'
           : value,

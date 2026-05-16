@@ -18,24 +18,17 @@ import * as Uploads from './core/uploads';
 import * as API from './resources/index';
 import { APIPromise } from './core/api-promise';
 import {
-  BaseMemory,
   Memories,
   Memory,
   MemoryCreateParams,
   MemoryCreateResponse,
-  MemoryFlushParams,
-  MemoryFlushResponse,
   MemoryGetJobStatusResponse,
-  MemoryList,
-  MemoryListFacetsResponse,
   MemoryListParams,
-  MemoryRetrieveParams,
-  MemoryRetrieveResponse,
+  MemoryListResponse,
   MemorySearchParams,
   MemorySearchResponse,
-  MemoryUpdateParams,
 } from './resources/memories';
-import { Usage, UsageRetrieveResponse } from './resources/usage';
+import { Usage } from './resources/usage';
 import { type Fetch } from './internal/builtin-types';
 import { HeadersLike, NullableHeaders, buildHeaders } from './internal/headers';
 import { FinalRequestOptions, RequestOptions } from './internal/request-options';
@@ -275,18 +268,6 @@ export class XtraceMemoryManager {
 
   protected validateHeaders({ values, nulls }: NullableHeaders) {
     return;
-  }
-
-  protected async authHeaders(opts: FinalRequestOptions): Promise<NullableHeaders | undefined> {
-    return buildHeaders([await this.bearerAuth(opts), await this.orgIDHeaderAuth(opts)]);
-  }
-
-  protected async bearerAuth(opts: FinalRequestOptions): Promise<NullableHeaders | undefined> {
-    return buildHeaders([{ Authorization: `Bearer ${this.apiKey}` }]);
-  }
-
-  protected async orgIDHeaderAuth(opts: FinalRequestOptions): Promise<NullableHeaders | undefined> {
-    return buildHeaders([{ 'X-Org-Id': this.orgID }]);
   }
 
   /**
@@ -715,7 +696,6 @@ export class XtraceMemoryManager {
         ...(options.timeout ? { 'X-Stainless-Timeout': String(Math.trunc(options.timeout / 1000)) } : {}),
         ...getPlatformHeaders(),
       },
-      await this.authHeaders(options),
       this._options.defaultHeaders,
       bodyHeaders,
       options.headers,
@@ -797,9 +777,6 @@ export class XtraceMemoryManager {
   static toFile = Uploads.toFile;
 
   memories: API.Memories = new API.Memories(this);
-  /**
-   * Episode flush, usage counters, facets
-   */
   usage: API.Usage = new API.Usage(this);
 }
 
@@ -811,22 +788,15 @@ export declare namespace XtraceMemoryManager {
 
   export {
     Memories as Memories,
-    type BaseMemory as BaseMemory,
     type Memory as Memory,
-    type MemoryList as MemoryList,
     type MemoryCreateResponse as MemoryCreateResponse,
-    type MemoryRetrieveResponse as MemoryRetrieveResponse,
-    type MemoryFlushResponse as MemoryFlushResponse,
+    type MemoryListResponse as MemoryListResponse,
     type MemoryGetJobStatusResponse as MemoryGetJobStatusResponse,
-    type MemoryListFacetsResponse as MemoryListFacetsResponse,
     type MemorySearchResponse as MemorySearchResponse,
     type MemoryCreateParams as MemoryCreateParams,
-    type MemoryRetrieveParams as MemoryRetrieveParams,
-    type MemoryUpdateParams as MemoryUpdateParams,
     type MemoryListParams as MemoryListParams,
-    type MemoryFlushParams as MemoryFlushParams,
     type MemorySearchParams as MemorySearchParams,
   };
 
-  export { Usage as Usage, type UsageRetrieveResponse as UsageRetrieveResponse };
+  export { Usage as Usage };
 }
