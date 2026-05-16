@@ -1,46 +1,22 @@
-export { MemoryClient } from "./client.js";
-export type { MemoryClientOptions } from "./client.js";
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
-export { Memories } from "./memories.js";
-export type { IngestOptions, RequestContext } from "./memories.js";
+export { Xtraceai as default } from './client';
 
-export { Jobs } from "./jobs.js";
-export type { PollOptions } from "./jobs.js";
-
+export { type Uploadable, toFile } from './core/uploads';
+export { APIPromise } from './core/api-promise';
+export { Xtraceai, type ClientOptions } from './client';
 export {
-  MemoryError,
-  BadRequest,
-  Unauthorized,
-  Forbidden,
-  MemoryNotFound,
-  Conflict,
-  Unprocessable,
-  RateLimited,
-  ServerError,
-} from "./errors.js";
-
-export type {
-  ApiErrorBody,
-  ArtifactDetails,
-  ArtifactMemory,
-  EpisodeDetails,
-  EpisodeMemory,
-  FactDetails,
-  FactMemory,
-  Filter,
-  IngestJob,
-  IngestJobResult,
-  IngestRequest,
-  JobStatus,
-  ListEnvelope,
-  ListQuery,
-  Memory,
-  MemoryRef,
-  MemoryStatus,
-  MemoryType,
-  Message,
-  Role,
-  SearchListEnvelope,
-  SearchRequest,
-  UpdateRequest,
-} from "./types.js";
+  XtraceaiError,
+  APIError,
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  APIUserAbortError,
+  NotFoundError,
+  ConflictError,
+  RateLimitError,
+  BadRequestError,
+  AuthenticationError,
+  InternalServerError,
+  PermissionDeniedError,
+  UnprocessableEntityError,
+} from './core/error';
