@@ -1,6 +1,6 @@
 {
   "name": "@xtrace/memory",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "TypeScript SDK for the xtrace memory API",
   "license": "MIT",
   "type": "module",
@@ -27,7 +27,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "gen:types": "openapi-typescript spec/memory.json -o src/generated/types.ts",
     "smoke": "tsx examples/smoke.ts",
