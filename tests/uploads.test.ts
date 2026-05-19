@@ -1,7 +1,6 @@
 import fs from 'fs';
 import type { ResponseLike } from '@xtraceai/memory/internal/to-file';
 import { toFile } from '@xtraceai/memory/core/uploads';
-import { File } from 'node:buffer';
 
 class MyClass {
   name: string = 'foo';
