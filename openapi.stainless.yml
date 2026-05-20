@@ -1,0 +1,83 @@
+# Stainless SDK config — TypeScript target.
+#
+# Pair with openapi/memory_v2.json from the VecDB-Backend repo.
+# Schema reference: https://app.stainless.com/docs/reference/config
+
+organization:
+  name: xtraceai
+  docs: https://docs.xtrace.ai
+
+# Required: list of deployment targets.
+environments:
+  production: https://api.production.xtrace.ai
+  staging: https://api.staging.xtrace.ai
+
+# Required: README generation config. Keep minimal — example_requests
+# can be overridden in the dashboard later.
+readme:
+  example_requests:
+    headline:
+      type: request
+      endpoint: post /v1/memories
+      params:
+        messages:
+          - role: user
+            content: "My favorite food is pad see ew."
+        user_id: alice
+        conv_id: conv_2026_05_16
+    default:
+      type: request
+      endpoint: post /v1/memories/search
+      params:
+        query: "who likes thai food?"
+        filters:
+          user_id: alice
+
+# What language(s) to generate.
+targets:
+  typescript:
+    package_name: "@xtraceai/memory"
+    production_repo: XTraceAI/memory-sdk-ts
+    publish:
+      npm:
+        access: public
+        license: MIT
+
+# Client-level options — these become MemoryClient constructor args.
+# The security_scheme names must match `components.securitySchemes` in
+# openapi/memory_v2.json: BearerToken (Authorization: Token <key>) and
+# OrgId (X-Org-Id header).
+client_settings:
+  # Default-export class name. Matches the internal `xmem` library
+  # name used throughout the backend (xmem.EmbeddingGatedPolicy, etc.).
+  client_name: XMem
+  opts:
+    api_key:
+      type: string
+      description: "API key (xtk_...). Sent as `Authorization: Bearer <key>`."
+      auth:
+        security_scheme: BearerToken
+    org_id:
+      type: string
+      description: "Organization id."
+      auth:
+        security_scheme: OrgId
+
+# Map OpenAPI operations to a clean resource layout.
+# Each method value is a shorthand "verb path" string (Stainless infers
+# request/response from the spec). Custom helpers (poll-until-done,
+# context_prompt sugar) can be added later through the dashboard.
+resources:
+  memories:
+    methods:
+      ingest:   post /v1/memories
+      list:     get /v1/memories
+      retrieve: get /v1/memories/{memory_id}
+      update:   patch /v1/memories/{memory_id}
+      delete:   delete /v1/memories/{memory_id}
+      search:   post /v1/memories/search
+
+    subresources:
+      jobs:
+        methods:
+          retrieve: get /v1/memories/jobs/{job_id}
