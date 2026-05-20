@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 (2026-05-20)
+
+Full Changelog: [v0.2.0...v0.3.0](https://github.com/XTraceAI/memory-sdk-ts/compare/v0.2.0...v0.3.0)
+
+### Features
+
+* **api:** add Stainless SDK configuration for TypeScript target ([38d392e](https://github.com/XTraceAI/memory-sdk-ts/commit/38d392e5a0b376bda20d94f17466d4e523063ed3))
+
 ## 0.2.0 (2026-05-20)
 
 Full Changelog: [v0.1.0...v0.2.0](https://github.com/XTraceAI/memory-sdk-ts/compare/v0.1.0...v0.2.0)
