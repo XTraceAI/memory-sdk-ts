@@ -6,7 +6,7 @@ export interface MemoryClientOptions {
   apiKey: string;
   /** Organization id (`org_…`). Required — paired with the API key on every request. */
   orgId: string;
-  /** Override the base URL. Defaults to `https://api.xtrace.ai`. */
+  /** Override the base URL. Defaults to `https://api.production.xtrace.ai`. */
   baseUrl?: string;
   /** Inject a custom fetch (e.g. for tests, retries-with-instrumentation, or a non-global polyfill). */
   fetch?: typeof globalThis.fetch;

@@ -1,11 +1,11 @@
-# @xtrace/memory
+# @xtraceai/memory
 
-TypeScript SDK for the [xtrace memory API](https://api.xtrace.ai) — a hosted memory service for AI agents. Send conversation messages, get back structured facts, artifacts, and episodes; search them with vector + filter queries.
+TypeScript SDK for the [xtrace memory API](https://api.production.xtrace.ai) — a hosted memory service for AI agents. Send conversation messages, get back structured facts, artifacts, and episodes; search them with vector + filter queries.
 
 ## Install
 
 ```bash
-npm install @xtrace/memory
+npm install @xtraceai/memory
 ```
 
 Requires Node 18+ (uses native `fetch`). Works in the browser too.
@@ -13,7 +13,7 @@ Requires Node 18+ (uses native `fetch`). Works in the browser too.
 ## Quickstart
 
 ```ts
-import { MemoryClient } from "@xtrace/memory";
+import { MemoryClient } from "@xtraceai/memory";
 
 const client = new MemoryClient({
   apiKey: process.env.XTRACE_API_KEY!, // xtk_...
@@ -70,7 +70,7 @@ await client.memories.delete(memory.id);
 All errors extend `MemoryError`. Match on `error.code` for stable machine-readable handling:
 
 ```ts
-import { MemoryNotFound, RateLimited } from "@xtrace/memory";
+import { MemoryNotFound, RateLimited } from "@xtraceai/memory";
 
 try {
   await client.memories.get("fact_does_not_exist");

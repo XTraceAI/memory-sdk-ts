@@ -137,7 +137,7 @@ export function defaultHttpConfig(input: {
   return {
     apiKey: input.apiKey,
     orgId: input.orgId,
-    baseUrl: input.baseUrl ?? "https://api.xtrace.ai",
+    baseUrl: input.baseUrl ?? "https://api.production.xtrace.ai",
     fetch: input.fetch ?? globalThis.fetch.bind(globalThis),
     maxRetries: input.maxRetries ?? 2,
     defaultRequestId: input.defaultRequestId,
