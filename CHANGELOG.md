@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 (2026-05-20)
+
+Full Changelog: [v0.1.0...v0.2.0](https://github.com/XTraceAI/memory-sdk-ts/compare/v0.1.0...v0.2.0)
+
+### Features
+
+* **api:** manual updates ([3cac1dc](https://github.com/XTraceAI/memory-sdk-ts/commit/3cac1dc853574504877610aeda9cc1a15db094b4))
+
+
+### Bug Fixes
+
+* **typescript:** upgrade tsc-multi so that it works with Node 26 ([52a48ca](https://github.com/XTraceAI/memory-sdk-ts/commit/52a48ca20281d052cdb9a2d7fc4ed73bda1be451))
+
+
+### Chores
+
+* **tests:** remove redundant File import ([2d2565c](https://github.com/XTraceAI/memory-sdk-ts/commit/2d2565ca269b84ebe907ed91491d76dd0a7fa0dd))
+
 ## 0.1.0 (2026-05-16)
 
 Full Changelog: [v0.0.1...v0.1.0](https://github.com/XTraceAI/memory-sdk-ts/compare/v0.0.1...v0.1.0)

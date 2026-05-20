@@ -43,7 +43,7 @@ import {
 import { isEmptyObj } from './internal/utils/values';
 
 const environments = {
-  production: 'https://api.xtrace.ai',
+  production: 'https://api.production.xtrace.ai',
   staging: 'https://api.staging.xtrace.ai',
 };
 type Environment = keyof typeof environments;
@@ -63,7 +63,7 @@ export interface ClientOptions {
    * Specifies the environment to use for the API.
    *
    * Each environment maps to a different base URL:
-   * - `production` corresponds to `https://api.xtrace.ai`
+   * - `production` corresponds to `https://api.production.xtrace.ai`
    * - `staging` corresponds to `https://api.staging.xtrace.ai`
    */
   environment?: Environment | undefined;
@@ -162,7 +162,7 @@ export class Xtraceai {
    * @param {string} opts.apiKey
    * @param {string} opts.orgID
    * @param {Environment} [opts.environment=production] - Specifies the environment URL to use for the API.
-   * @param {string} [opts.baseURL=process.env['XTRACEAI_BASE_URL'] ?? https://api.xtrace.ai] - Override the default base URL for the API.
+   * @param {string} [opts.baseURL=process.env['XTRACEAI_BASE_URL'] ?? https://api.production.xtrace.ai] - Override the default base URL for the API.
    * @param {number} [opts.timeout=1 minute] - The maximum amount of time (in milliseconds) the client will wait for a response before timing out.
    * @param {MergedRequestInit} [opts.fetchOptions] - Additional `RequestInit` options to be passed to `fetch` calls.
    * @param {Fetch} [opts.fetch] - Specify a custom `fetch` function implementation.
