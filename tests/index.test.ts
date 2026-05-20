@@ -354,13 +354,13 @@ describe('instantiate client', () => {
     test('empty env variable', () => {
       process.env['XTRACEAI_BASE_URL'] = ''; // empty
       const client = new Xtraceai({ apiKey: 'My API Key', orgID: 'My Org ID' });
-      expect(client.baseURL).toEqual('https://api.xtrace.ai');
+      expect(client.baseURL).toEqual('https://api.production.xtrace.ai');
     });
 
     test('blank env variable', () => {
       process.env['XTRACEAI_BASE_URL'] = '  '; // blank
       const client = new Xtraceai({ apiKey: 'My API Key', orgID: 'My Org ID' });
-      expect(client.baseURL).toEqual('https://api.xtrace.ai');
+      expect(client.baseURL).toEqual('https://api.production.xtrace.ai');
     });
 
     test('env variable with environment', () => {
@@ -383,7 +383,7 @@ describe('instantiate client', () => {
         baseURL: null,
         environment: 'production',
       });
-      expect(client.baseURL).toEqual('https://api.xtrace.ai');
+      expect(client.baseURL).toEqual('https://api.production.xtrace.ai');
     });
 
     test('in request options', () => {
