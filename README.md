@@ -10,6 +10,15 @@ npm install @xtraceai/memory
 
 Requires Node 18+ (uses native `fetch`). Works in the browser too.
 
+## Get credentials
+
+Sign in at [app.xtrace.ai](https://app.xtrace.ai) and grab two values from **Settings → API Keys**:
+
+- **API key** — `xtk_…`
+- **Org id** — your organization identifier
+
+Both are required on every request. See the [full docs](https://docs.mem.xtrace.ai/guides/authentication) for storage best practices.
+
 ## Quickstart
 
 ```ts
