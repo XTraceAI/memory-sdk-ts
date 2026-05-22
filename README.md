@@ -74,6 +74,53 @@ await client.memories.update(memory.id, { text: "Updated content" });
 await client.memories.delete(memory.id);
 ```
 
+## Vercel AI SDK integration
+
+A separate subpath, `@xtraceai/memory/ai-sdk`, ships two ways to use the SDK with the [Vercel AI SDK](https://ai-sdk.dev). Peer dependencies (`ai`, `zod`) are optional — they're only required if you import from this subpath.
+
+### Memory-aware model wrapper (auto-context + auto-ingest)
+
+Wraps any `LanguageModel` so it searches your memory before each call and ingests the turn after. Set it and forget it:
+
+```ts
+import { streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { createXtraceMemory } from "@xtraceai/memory/ai-sdk";
+
+const xtrace = createXtraceMemory({
+  apiKey: process.env.XTRACE_API_KEY!,
+  orgId:  process.env.XTRACE_ORG_ID!,
+  user_id: "alice",
+  conv_id: "conv_42",
+});
+
+const result = streamText({
+  model: xtrace(openai("gpt-4o-mini")),  // memory-aware wrapper
+  messages,
+});
+```
+
+### Memory as tools (LLM decides when to recall / save)
+
+For agent loops where you want the model in control of memory access:
+
+```ts
+import { streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { MemoryClient } from "@xtraceai/memory";
+import { memoryTools } from "@xtraceai/memory/ai-sdk";
+
+const client = new MemoryClient({ apiKey, orgId });
+
+const result = streamText({
+  model: openai("gpt-4o-mini"),
+  tools: memoryTools(client, { user_id: "alice", conv_id: "conv_42" }),
+  messages,
+});
+```
+
+The model gets two tools: `search_memory(query, limit?)` and `save_memory(fact)`. Use `{ includeSave: false }` for read-only.
+
 ## Errors
 
 All errors extend `MemoryError`. Match on `error.code` for stable machine-readable handling:

@@ -1,7 +1,7 @@
 {
   "name": "@xtraceai/memory",
-  "version": "0.0.2",
-  "description": "TypeScript SDK for the xtrace memory API",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the xtrace memory API — with a Vercel AI SDK integration at @xtraceai/memory/ai-sdk",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -12,6 +12,23 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./ai-sdk": {
+      "types": "./dist/ai-sdk/index.d.ts",
+      "import": "./dist/ai-sdk/index.js",
+      "require": "./dist/ai-sdk/index.cjs"
+    }
+  },
+  "peerDependencies": {
+    "ai": "^5.0.0 || ^6.0.0",
+    "zod": "^3.23.0 || ^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
     }
   },
   "files": [
@@ -35,11 +52,13 @@
   },
   "devDependencies": {
     "@types/node": "^20.12.0",
+    "ai": "^6.0.190",
     "openapi-typescript": "^7.4.0",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "zod": "^3.25.76"
   },
   "repository": {
     "type": "git",
@@ -54,6 +73,8 @@
     "memory",
     "sdk",
     "ai",
-    "agent"
+    "agent",
+    "ai-sdk",
+    "vercel-ai-sdk"
   ]
 }
