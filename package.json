@@ -54,7 +54,6 @@
     "memory",
     "sdk",
     "ai",
-    "agent",
-    "mem0"
+    "agent"
   ]
 }
