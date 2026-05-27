@@ -87,7 +87,7 @@ export interface IngestRequest {
   agent_id?: string;
   app_id?: string;
   metadata?: Record<string, unknown>;
-  /** Opt into artifact extraction. Off by default — most expensive stage. */
+  /** Run the artifact-extraction stage. Defaults to `true` in the SDK; pass `false` to skip it. */
   extract_artifacts?: boolean;
 }
 

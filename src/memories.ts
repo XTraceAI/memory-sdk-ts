@@ -45,8 +45,9 @@ export class Memories {
    *   default path.
    */
   async ingest(body: IngestRequest, options: IngestOptions = {}): Promise<IngestJob> {
+    const payload = { ...body, extract_artifacts: body.extract_artifacts ?? true };
     const { body: response } = await this.http.request<IngestJob>("POST", "/v1/memories", {
-      body,
+      body: payload,
       query: options.wait ? { wait: "true" } : undefined,
       signal: options.signal,
       requestId: options.requestId,

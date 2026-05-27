@@ -108,6 +108,7 @@ export function memoryTools(
           messages: [{ role: "user", content: fact }],
           user_id: scope.user_id,
           conv_id: scope.conv_id,
+          extract_artifacts: false,
         },
         { wait: true },
       );

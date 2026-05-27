@@ -206,6 +206,7 @@ async function ingestTurn(
         ],
         user_id: config.user_id,
         conv_id: config.conv_id,
+        extract_artifacts: false,
       },
       { wait: true },
     );
