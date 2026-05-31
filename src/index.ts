@@ -1,7 +1,7 @@
 export { MemoryClient } from "./client.js";
 export type { MemoryClientOptions } from "./client.js";
 
-export { Memories, renderMemoriesPrompt } from "./memories.js";
+export { Memories, renderMemoriesPrompt, DEFAULT_PROMPT_TEMPLATE } from "./memories.js";
 export type { IngestOptions, RequestContext } from "./memories.js";
 
 export { Groups } from "./groups.js";
@@ -46,6 +46,7 @@ export type {
   MemoryStatus,
   MemoryType,
   Message,
+  PromptTemplate,
   RecallParams,
   RecallResult,
   RecallScopeStat,

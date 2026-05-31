@@ -245,6 +245,32 @@ export interface RecallResult {
   scopes: RecallScopeStat[];
 }
 
+/**
+ * Declarative spec for how {@link renderMemoriesPrompt} formats the prompt.
+ * Deliberately JSON-serializable (data, not code): a future API endpoint can
+ * return xmem's preferred template and the SDK renders with it — fetched once /
+ * cached, so no per-call latency — instead of the server assembling each prompt.
+ * Override per call via `recall(..., { template })`; see `DEFAULT_PROMPT_TEMPLATE`.
+ *
+ * Note: a template controls *formatting of the fields each row carries*. It can't
+ * reproduce xmem features that need extra data (authorship sections, full
+ * artifact bodies, char-budgeting) without also widening the search payload.
+ */
+export interface PromptTemplate {
+  /** Leading line of the block. */
+  header: string;
+  /** Section header for personal (untagged) memories. */
+  personalLabel: string;
+  /** Section header for a group whose name didn't resolve; `{id}` is substituted. */
+  unknownGroupLabel: string;
+  /** Inline tag prepended per memory type (`""` = no tag), e.g. `artifact: "[document] "`. */
+  typeLabels: Record<MemoryType, string>;
+  /** Append `[cat, …]` per line when the memory has categories. */
+  includeCategories: boolean;
+  /** Append `(recorded YYYY-MM-DD)` per line when available. */
+  includeRecordedDate: boolean;
+}
+
 // ── Groups (group registry — POST /v1/groups etc.) ─────────────────────────
 
 export type GroupStatus = "active" | "archived";

@@ -172,7 +172,7 @@ describe("renderMemoriesPrompt", () => {
         mem("P", "is vegetarian", 0.9, { categories: ["diet"] }),
         mem("S", "trip hotel is near Shibuya", 0.8, { group_ids: ["grp_tokyo"], categories: ["travel"] }),
       ],
-      { grp_tokyo: "Tokyo trip 2026" },
+      { groupNames: { grp_tokyo: "Tokyo trip 2026" } },
     );
     expect(out).toBe(
       "Relevant memories about the user:\n\n" +
@@ -201,6 +201,30 @@ describe("renderMemoriesPrompt", () => {
     expect(out).toContain("- is vegetarian [diet] (recorded 2026-01-01)");
     expect(out).toContain("- [document] Tokyo itinerary: 5-day plan with hotels (recorded 2026-01-01)");
     expect(out).toContain("- [conversation] Trip planning: discussed hotel options (recorded 2026-01-01)");
+  });
+
+  it("honors a custom template (header + per-type labels + toggles)", () => {
+    const out = renderMemoriesPrompt(
+      [
+        mem("F", "is vegetarian", 0.9, { categories: ["diet"] }),
+        mem("D", "5-day plan", 0.8, {
+          type: "artifact",
+          details: { title: "Itinerary", rationale: null, version: null, root_id: null, source_fact_ids: [], episode_ids: [] },
+        }),
+      ],
+      {
+        template: {
+          header: "Known about the user:",
+          personalLabel: "Personal",
+          unknownGroupLabel: "Group {id}",
+          typeLabels: { fact: "", artifact: "[doc] ", episode: "[chat] " },
+          includeCategories: false,
+          includeRecordedDate: false,
+        },
+      },
+    );
+    // custom header, custom artifact tag, categories + date suppressed
+    expect(out).toBe("Known about the user:\n- is vegetarian\n- [doc] Itinerary: 5-day plan");
   });
 
   it("returns an empty string for no memories", () => {

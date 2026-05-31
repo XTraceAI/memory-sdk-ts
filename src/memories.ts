@@ -7,6 +7,7 @@ import type {
   ListEnvelope,
   ListQuery,
   Memory,
+  PromptTemplate,
   RecallParams,
   RecallResult,
   RecallScopeStat,
@@ -15,49 +16,62 @@ import type {
 } from "./types.js";
 
 /**
+ * The SDK's built-in prompt format. Phase 1 of the template plan: the format
+ * lives here as data so it can be swapped wholesale. Phase 2: a future API
+ * endpoint returns xmem's preferred {@link PromptTemplate}; the SDK fetches it
+ * (cached) and passes it as `recall(..., { template })` with no render-engine
+ * change.
+ */
+export const DEFAULT_PROMPT_TEMPLATE: PromptTemplate = {
+  header: "Relevant memories about the user:",
+  personalLabel: "Personal",
+  unknownGroupLabel: "Shared group {id}",
+  typeLabels: { fact: "", artifact: "[document] ", episode: "[conversation] " },
+  includeCategories: true,
+  includeRecordedDate: true,
+};
+
+/**
  * Render memories into a single, ready-to-inject context block — deterministic,
  * no LLM, no wasted tokens. Personal (untagged) memories and each group's
- * shared memories become labeled sections; `groupNames` maps a `group_id` to a
- * human label for the section header (falls back to the id). With no
- * group-tagged memories it's a flat list. Each bullet carries the memory's
- * categories and recorded date when available. Pass your own renderer to
- * `recall(..., { render })` for a different shape.
+ * shared memories become labeled sections (a flat list when there are no
+ * group-tagged rows); `opts.groupNames` maps a `group_id` to its section label
+ * (falls back to the template's `unknownGroupLabel`). Formatting — header,
+ * labels, per-type tags, whether categories/dates show — is driven by
+ * `opts.template` (defaults to {@link DEFAULT_PROMPT_TEMPLATE}). Pass your own
+ * renderer to `recall(..., { render })` to bypass this entirely.
  */
 export function renderMemoriesPrompt(
   memories: Memory[],
-  groupNames: Record<string, string> = {},
+  opts: { groupNames?: Record<string, string>; template?: PromptTemplate } = {},
 ): string {
   if (memories.length === 0) return "";
+  const t = opts.template ?? DEFAULT_PROMPT_TEMPLATE;
+  const groupNames = opts.groupNames ?? {};
 
   const line = (m: Memory): string => {
-    // Light type-awareness: facts render as plain statements; artifacts and
-    // episodes get a type tag + their title, so the agent knows it's a document
-    // or a past conversation rather than a stated fact. (xmem's server-side
-    // assembler does much more — authorship sections, full artifact bodies — but
-    // that can't be reproduced from the row fields the SDK has.)
-    let prefix = "";
+    // Facts render as plain statements; artifacts/episodes get a per-type tag
+    // (from the template) + their title, so the agent can tell a document or a
+    // past conversation from a stated fact.
     let lead = m.text;
-    if (m.type === "artifact") {
-      prefix = "[document] ";
-      if (m.details.title) lead = `${m.details.title}: ${m.text}`;
-    } else if (m.type === "episode") {
-      prefix = "[conversation] ";
-      if (m.details.title) lead = `${m.details.title}: ${m.text}`;
+    if ((m.type === "artifact" || m.type === "episode") && m.details.title) {
+      lead = `${m.details.title}: ${m.text}`;
     }
-    let s = `- ${prefix}${lead}`;
-    if (m.categories && m.categories.length > 0) s += ` [${m.categories.join(", ")}]`;
-    const recorded = m.created_at ? m.created_at.slice(0, 10) : ""; // YYYY-MM-DD
+    let s = `- ${t.typeLabels[m.type] ?? ""}${lead}`;
+    if (t.includeCategories && m.categories && m.categories.length > 0) {
+      s += ` [${m.categories.join(", ")}]`;
+    }
+    const recorded = t.includeRecordedDate && m.created_at ? m.created_at.slice(0, 10) : "";
     if (recorded) s += ` (recorded ${recorded})`;
     return s;
   };
 
-  const header = "Relevant memories about the user:";
   const personal = memories.filter((m) => !m.group_ids || m.group_ids.length === 0);
   const shared = memories.filter((m) => m.group_ids && m.group_ids.length > 0);
 
   // No group-tagged memories → a flat list reads cleaner than a lone section.
   if (shared.length === 0) {
-    return `${header}\n${memories.map(line).join("\n")}`;
+    return `${t.header}\n${memories.map(line).join("\n")}`;
   }
 
   // Bucket shared memories by group, in first-appearance order. A memory tagged
@@ -77,12 +91,12 @@ export function renderMemoriesPrompt(
   }
 
   const sections: string[] = [];
-  if (personal.length > 0) sections.push(`Personal:\n${personal.map(line).join("\n")}`);
+  if (personal.length > 0) sections.push(`${t.personalLabel}:\n${personal.map(line).join("\n")}`);
   for (const gid of order) {
-    const label = groupNames[gid] || `Shared group ${gid}`;
+    const label = groupNames[gid] || t.unknownGroupLabel.replace("{id}", gid);
     sections.push(`${label}:\n${byGroup.get(gid)!.map(line).join("\n")}`);
   }
-  return [header, ...sections].join("\n\n");
+  return [t.header, ...sections].join("\n\n");
 }
 
 export interface IngestOptions {
@@ -205,8 +219,15 @@ export class Memories {
    */
   async recall(
     params: RecallParams,
-    options: { render?: (memories: Memory[], groupNames?: Record<string, string>) => string } &
-      RequestContext = {},
+    options: {
+      /** Override the prompt format (phase 2: feed a server-supplied template here). */
+      template?: PromptTemplate;
+      /** Bypass `renderMemoriesPrompt` entirely with your own renderer. */
+      render?: (
+        memories: Memory[],
+        opts?: { groupNames?: Record<string, string>; template?: PromptTemplate },
+      ) => string;
+    } & RequestContext = {},
   ): Promise<RecallResult> {
     const { query, user_id, group_ids, agent_id, app_id } = params;
     const mode = params.mode ?? "compose";
@@ -265,7 +286,11 @@ export class Memories {
       .slice(0, limit);
 
     const render = options.render ?? renderMemoriesPrompt;
-    return { memories, prompt: render(memories, groupNames), scopes };
+    return {
+      memories,
+      prompt: render(memories, { groupNames, template: options.template }),
+      scopes,
+    };
   }
 
   /**
