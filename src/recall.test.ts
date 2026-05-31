@@ -3,8 +3,8 @@ import { Memories, renderMemoriesPrompt } from "./memories.js";
 import type { HttpClient } from "./http.js";
 import type { Memory, SearchRequest } from "./types.js";
 
-/** Minimal fact-shaped Memory for fixtures. */
-function mem(id: string, text: string, score: number | null): Memory {
+/** Minimal fact-shaped Memory for fixtures; `over` patches any field. */
+function mem(id: string, text: string, score: number | null, over: Partial<Memory> = {}): Memory {
   return {
     id,
     object: "memory",
@@ -29,6 +29,7 @@ function mem(id: string, text: string, score: number | null): Memory {
       artifact_ids: [],
       source_event_ids: [],
     },
+    ...over,
   } as Memory;
 }
 
@@ -116,10 +117,26 @@ describe("Memories.recall", () => {
 });
 
 describe("renderMemoriesPrompt", () => {
-  it("renders a bulleted context block", () => {
+  it("renders a flat bulleted block when all memories are one kind", () => {
     expect(
       renderMemoriesPrompt([mem("A", "likes thai", 0.9), mem("B", "allergic to peanuts", 0.8)]),
-    ).toBe("Relevant memories about the user:\n- likes thai\n- allergic to peanuts");
+    ).toBe(
+      "Relevant memories about the user:\n" +
+        "- likes thai (recorded 2026-01-01)\n" +
+        "- allergic to peanuts (recorded 2026-01-01)",
+    );
+  });
+
+  it("splits personal vs shared (group-tagged) into sections, with categories", () => {
+    const out = renderMemoriesPrompt([
+      mem("P", "is vegetarian", 0.9, { categories: ["diet"] }),
+      mem("S", "trip hotel is near Shibuya", 0.8, { group_ids: ["grp_tokyo"], categories: ["travel"] }),
+    ]);
+    expect(out).toBe(
+      "Relevant memories about the user:\n\n" +
+        "Personal:\n- is vegetarian [diet] (recorded 2026-01-01)\n\n" +
+        "Shared (group):\n- trip hotel is near Shibuya [travel] (recorded 2026-01-01)",
+    );
   });
 
   it("returns an empty string for no memories", () => {

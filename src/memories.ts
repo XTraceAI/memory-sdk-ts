@@ -14,14 +14,37 @@ import type {
 } from "./types.js";
 
 /**
- * Render a list of memories into a single, ready-to-inject context block.
- * Deterministic (no LLM, no wasted tokens). Pass your own renderer to
- * `recall(..., { render })` if you want a different shape.
+ * Render memories into a single, ready-to-inject context block — deterministic,
+ * no LLM, no wasted tokens. Group-tagged ("shared") and personal memories are
+ * split into labeled sections when both are present (a flat list otherwise);
+ * each bullet carries the memory's categories and recorded date when available.
+ * Pass your own renderer to `recall(..., { render })` for a different shape.
  */
 export function renderMemoriesPrompt(memories: Memory[]): string {
   if (memories.length === 0) return "";
-  const lines = memories.map((m) => `- ${m.text}`);
-  return `Relevant memories about the user:\n${lines.join("\n")}`;
+
+  const line = (m: Memory): string => {
+    let s = `- ${m.text}`;
+    if (m.categories && m.categories.length > 0) s += ` [${m.categories.join(", ")}]`;
+    const recorded = m.created_at ? m.created_at.slice(0, 10) : ""; // YYYY-MM-DD
+    if (recorded) s += ` (recorded ${recorded})`;
+    return s;
+  };
+
+  const header = "Relevant memories about the user:";
+  const shared = memories.filter((m) => m.group_ids && m.group_ids.length > 0);
+  const personal = memories.filter((m) => !m.group_ids || m.group_ids.length === 0);
+
+  // Only one kind present → a flat list reads cleaner than a lone section.
+  if (shared.length === 0 || personal.length === 0) {
+    return `${header}\n${memories.map(line).join("\n")}`;
+  }
+
+  return [
+    header,
+    `Personal:\n${personal.map(line).join("\n")}`,
+    `Shared (group):\n${shared.map(line).join("\n")}`,
+  ].join("\n\n");
 }
 
 export interface IngestOptions {
