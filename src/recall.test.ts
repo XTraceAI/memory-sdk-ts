@@ -186,6 +186,23 @@ describe("renderMemoriesPrompt", () => {
     expect(out).toContain("Shared group grp_z:");
   });
 
+  it("tags artifacts/episodes by type (with title); facts stay plain", () => {
+    const out = renderMemoriesPrompt([
+      mem("F", "is vegetarian", 0.9, { categories: ["diet"] }),
+      mem("D", "5-day plan with hotels", 0.8, {
+        type: "artifact",
+        details: { title: "Tokyo itinerary", rationale: null, version: null, root_id: null, source_fact_ids: [], episode_ids: [] },
+      }),
+      mem("E", "discussed hotel options", 0.7, {
+        type: "episode",
+        details: { title: "Trip planning", started_at: null, ended_at: null, fact_ids: [], artifact_ids: [] },
+      }),
+    ]);
+    expect(out).toContain("- is vegetarian [diet] (recorded 2026-01-01)");
+    expect(out).toContain("- [document] Tokyo itinerary: 5-day plan with hotels (recorded 2026-01-01)");
+    expect(out).toContain("- [conversation] Trip planning: discussed hotel options (recorded 2026-01-01)");
+  });
+
   it("returns an empty string for no memories", () => {
     expect(renderMemoriesPrompt([])).toBe("");
   });

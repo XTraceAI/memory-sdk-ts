@@ -30,7 +30,21 @@ export function renderMemoriesPrompt(
   if (memories.length === 0) return "";
 
   const line = (m: Memory): string => {
-    let s = `- ${m.text}`;
+    // Light type-awareness: facts render as plain statements; artifacts and
+    // episodes get a type tag + their title, so the agent knows it's a document
+    // or a past conversation rather than a stated fact. (xmem's server-side
+    // assembler does much more — authorship sections, full artifact bodies — but
+    // that can't be reproduced from the row fields the SDK has.)
+    let prefix = "";
+    let lead = m.text;
+    if (m.type === "artifact") {
+      prefix = "[document] ";
+      if (m.details.title) lead = `${m.details.title}: ${m.text}`;
+    } else if (m.type === "episode") {
+      prefix = "[conversation] ";
+      if (m.details.title) lead = `${m.details.title}: ${m.text}`;
+    }
+    let s = `- ${prefix}${lead}`;
     if (m.categories && m.categories.length > 0) s += ` [${m.categories.join(", ")}]`;
     const recorded = m.created_at ? m.created_at.slice(0, 10) : ""; // YYYY-MM-DD
     if (recorded) s += ` (recorded ${recorded})`;
