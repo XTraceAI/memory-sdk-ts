@@ -142,6 +142,25 @@ describe("Memories.recall", () => {
     expect(res.memories.map((m) => m.id)).toEqual(["A", "B"]);
   });
 
+  it("fair-merges so a row-rich personal scope can't starve the shared scope", async () => {
+    const { http } = fakeHttp({
+      onSearch: (body) =>
+        body.user_id && !body.group_ids
+          ? [mem("P1", "p1", 0.99), mem("P2", "p2", 0.98), mem("P3", "p3", 0.97)]
+          : [mem("S1", "s1", 0.5, { group_ids: ["grp_x"] })],
+    });
+    const res = await new Memories(http).recall({
+      query: "q",
+      user_id: "alice",
+      group_ids: ["grp_x"],
+      limit: 2,
+    });
+    const ids = res.memories.map((m) => m.id);
+    // Plain top-2-by-score would be [P1, P2] and drop S1; round-robin keeps S1.
+    expect(ids).toContain("S1");
+    expect(ids).toHaveLength(2);
+  });
+
   it("passes agent_id/app_id/mode through and honors a custom renderer", async () => {
     const { http, calls } = fakeHttp({ onSearch: () => [mem("A", "a", 0.5)] });
     const res = await new Memories(http).recall(
@@ -242,6 +261,29 @@ describe("renderMemoriesPrompt", () => {
     );
     // custom header, custom artifact tag, categories + date suppressed
     expect(out).toBe("Known about the user:\n- is vegetarian\n- [doc] Itinerary: 5-day plan");
+  });
+
+  it("buckets only requested groups; an other-group row falls under Personal", () => {
+    const out = renderMemoriesPrompt(
+      [
+        mem("A1", "stays near Shibuya", 0.9, { group_ids: ["grp_a"], user_id: "alice" }),
+        mem("B1", "likes the Louvre", 0.8, { group_ids: ["grp_b"], user_id: "alice" }),
+      ],
+      { groupNames: { grp_a: "Trip A", grp_b: "Trip B" }, requestedGroupIds: ["grp_a"], viewerUserId: "alice" },
+    );
+    expect(out).toContain("Trip A:");
+    expect(out).toContain("Personal:");
+    expect(out).toContain("- likes the Louvre"); // grp_b row, rendered as personal (unattributed)
+    expect(out).not.toContain("Trip B"); // no leaked section / name
+  });
+
+  it("a row tagged to requested + extra groups shows only under the requested section", () => {
+    const out = renderMemoriesPrompt(
+      [mem("M", "shared fact", 0.9, { group_ids: ["grp_a", "grp_b"], user_id: "bob" })],
+      { groupNames: { grp_a: "Trip A", grp_b: "Trip B" }, requestedGroupIds: ["grp_a"] },
+    );
+    expect(out).toContain("Trip A:");
+    expect(out).not.toContain("Trip B");
   });
 
   it("returns an empty string for no memories", () => {

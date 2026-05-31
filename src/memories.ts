@@ -44,11 +44,28 @@ export const DEFAULT_PROMPT_TEMPLATE: PromptTemplate = {
  */
 export function renderMemoriesPrompt(
   memories: Memory[],
-  opts: { groupNames?: Record<string, string>; template?: PromptTemplate; viewerUserId?: string } = {},
+  opts: {
+    groupNames?: Record<string, string>;
+    template?: PromptTemplate;
+    viewerUserId?: string;
+    /**
+     * The group ids the caller actually requested. When set, only these groups
+     * get their own section; a row tagged solely to OTHER groups (e.g. the
+     * caller's own row from another trip, surfaced by the personal scope)
+     * renders under Personal instead of leaking an unrequested group section.
+     * When omitted, every group tag present gets a section (back-compat).
+     */
+    requestedGroupIds?: string[];
+  } = {},
 ): string {
   if (memories.length === 0) return "";
   const t = opts.template ?? DEFAULT_PROMPT_TEMPLATE;
   const groupNames = opts.groupNames ?? {};
+  const requestedSet = opts.requestedGroupIds ? new Set(opts.requestedGroupIds) : null;
+  // A row belongs in a group section iff it carries a tag we're sectioning on:
+  // any requested group (when a request set is given), else any group at all.
+  const isGroupRow = (m: Memory): boolean =>
+    (m.group_ids ?? []).some((g) => (requestedSet ? requestedSet.has(g) : true));
 
   // `inGroup`: attribute shared lines to their author (a cross-user group read
   // mixes travelers). Personal lines are always the caller's, so never attributed.
@@ -73,20 +90,23 @@ export function renderMemoriesPrompt(
     return s;
   };
 
-  const personal = memories.filter((m) => !m.group_ids || m.group_ids.length === 0);
-  const shared = memories.filter((m) => m.group_ids && m.group_ids.length > 0);
+  const personal = memories.filter((m) => !isGroupRow(m));
+  const shared = memories.filter((m) => isGroupRow(m));
 
-  // No group-tagged memories → a flat list reads cleaner than a lone section.
+  // No sectionable group rows → a flat list reads cleaner than a lone section.
   if (shared.length === 0) {
     return `${t.header}\n${memories.map((m) => line(m, false)).join("\n")}`;
   }
 
-  // Bucket shared memories by group, in first-appearance order. A memory tagged
-  // to multiple groups appears under each (rare).
+  // Bucket shared memories by group, in first-appearance order — but only under
+  // groups we're sectioning on (the requested set, when given), so a row tagged
+  // to extra groups doesn't spawn unrequested sections. Multi-tagged rows appear
+  // under each of their sectioned groups (rare).
   const order: string[] = [];
   const byGroup = new Map<string, Memory[]>();
   for (const m of shared) {
     for (const gid of m.group_ids) {
+      if (requestedSet && !requestedSet.has(gid)) continue;
       let bucket = byGroup.get(gid);
       if (!bucket) {
         bucket = [];
@@ -234,7 +254,12 @@ export class Memories {
       /** Bypass `renderMemoriesPrompt` entirely with your own renderer. */
       render?: (
         memories: Memory[],
-        opts?: { groupNames?: Record<string, string>; template?: PromptTemplate; viewerUserId?: string },
+        opts?: {
+          groupNames?: Record<string, string>;
+          template?: PromptTemplate;
+          viewerUserId?: string;
+          requestedGroupIds?: string[];
+        },
       ) => string;
     } & RequestContext = {},
   ): Promise<RecallResult> {
@@ -275,29 +300,56 @@ export class Memories {
       namesJob,
     ]);
 
-    // Dedupe across scopes by id; when a memory matches more than one scope,
-    // keep the higher-scored copy so the merged ranking stays meaningful.
-    const byId = new Map<string, Memory>();
+    // Per-scope deduped, score-ordered lists, plus the higher-scored copy of any
+    // row that appears in both scopes.
     const scopes: RecallScopeStat[] = [];
+    const bestById = new Map<string, Memory>();
+    const lists: Memory[][] = [];
     for (const { scope, env } of envelopes) {
       const rows = env.data ?? [];
       scopes.push({ scope, count: rows.length });
       for (const m of rows) {
-        const existing = byId.get(m.id);
-        if (!existing || (m.score ?? -Infinity) > (existing.score ?? -Infinity)) {
-          byId.set(m.id, m);
-        }
+        const ex = bestById.get(m.id);
+        if (!ex || (m.score ?? -Infinity) > (ex.score ?? -Infinity)) bestById.set(m.id, m);
       }
+      lists.push([...rows].sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity)));
     }
 
-    const memories = Array.from(byId.values())
-      .sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity))
-      .slice(0, limit);
+    // Round-robin across scopes so neither starves the other. Both searches embed
+    // the same query, so scores ARE comparable — but a plain global top-`limit`
+    // cut could still let a row-rich personal scope fill every slot and drop the
+    // shared scope entirely, defeating a "personal + shared" read. Taking one row
+    // per scope per round guarantees each is represented up to `limit`.
+    const pickedIds = new Set<string>();
+    const picked: Memory[] = [];
+    for (let i = 0; picked.length < limit; i++) {
+      let advanced = false;
+      for (const list of lists) {
+        const row = list[i];
+        if (!row) continue;
+        advanced = true;
+        if (!pickedIds.has(row.id)) {
+          pickedIds.add(row.id);
+          picked.push(bestById.get(row.id)!);
+          if (picked.length >= limit) break;
+        }
+      }
+      if (!advanced) break;
+    }
+
+    // Return the array in score order for consumers; the prompt is sectioned, so
+    // cross-scope ordering there doesn't matter.
+    const memories = picked.sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));
 
     const render = options.render ?? renderMemoriesPrompt;
     return {
       memories,
-      prompt: render(memories, { groupNames, template: options.template, viewerUserId: user_id }),
+      prompt: render(memories, {
+        groupNames,
+        template: options.template,
+        viewerUserId: user_id,
+        requestedGroupIds: group_ids ?? [],
+      }),
       scopes,
     };
   }
