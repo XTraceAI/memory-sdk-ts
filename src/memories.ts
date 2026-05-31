@@ -29,6 +29,7 @@ export const DEFAULT_PROMPT_TEMPLATE: PromptTemplate = {
   typeLabels: { fact: "", artifact: "[document] ", episode: "[conversation] " },
   includeCategories: true,
   includeRecordedDate: true,
+  includeGroupAuthor: true,
 };
 
 /**
@@ -43,21 +44,27 @@ export const DEFAULT_PROMPT_TEMPLATE: PromptTemplate = {
  */
 export function renderMemoriesPrompt(
   memories: Memory[],
-  opts: { groupNames?: Record<string, string>; template?: PromptTemplate } = {},
+  opts: { groupNames?: Record<string, string>; template?: PromptTemplate; viewerUserId?: string } = {},
 ): string {
   if (memories.length === 0) return "";
   const t = opts.template ?? DEFAULT_PROMPT_TEMPLATE;
   const groupNames = opts.groupNames ?? {};
 
-  const line = (m: Memory): string => {
+  // `inGroup`: attribute shared lines to their author (a cross-user group read
+  // mixes travelers). Personal lines are always the caller's, so never attributed.
+  const line = (m: Memory, inGroup: boolean): string => {
+    let lead = m.text;
     // Facts render as plain statements; artifacts/episodes get a per-type tag
     // (from the template) + their title, so the agent can tell a document or a
     // past conversation from a stated fact.
-    let lead = m.text;
     if ((m.type === "artifact" || m.type === "episode") && m.details.title) {
       lead = `${m.details.title}: ${m.text}`;
     }
-    let s = `- ${t.typeLabels[m.type] ?? ""}${lead}`;
+    let author = "";
+    if (inGroup && t.includeGroupAuthor && m.user_id) {
+      author = `${m.user_id === opts.viewerUserId ? "you" : m.user_id}: `;
+    }
+    let s = `- ${author}${t.typeLabels[m.type] ?? ""}${lead}`;
     if (t.includeCategories && m.categories && m.categories.length > 0) {
       s += ` [${m.categories.join(", ")}]`;
     }
@@ -71,7 +78,7 @@ export function renderMemoriesPrompt(
 
   // No group-tagged memories → a flat list reads cleaner than a lone section.
   if (shared.length === 0) {
-    return `${t.header}\n${memories.map(line).join("\n")}`;
+    return `${t.header}\n${memories.map((m) => line(m, false)).join("\n")}`;
   }
 
   // Bucket shared memories by group, in first-appearance order. A memory tagged
@@ -91,10 +98,12 @@ export function renderMemoriesPrompt(
   }
 
   const sections: string[] = [];
-  if (personal.length > 0) sections.push(`${t.personalLabel}:\n${personal.map(line).join("\n")}`);
+  if (personal.length > 0) {
+    sections.push(`${t.personalLabel}:\n${personal.map((m) => line(m, false)).join("\n")}`);
+  }
   for (const gid of order) {
     const label = groupNames[gid] || t.unknownGroupLabel.replace("{id}", gid);
-    sections.push(`${label}:\n${byGroup.get(gid)!.map(line).join("\n")}`);
+    sections.push(`${label}:\n${byGroup.get(gid)!.map((m) => line(m, true)).join("\n")}`);
   }
   return [t.header, ...sections].join("\n\n");
 }
@@ -225,7 +234,7 @@ export class Memories {
       /** Bypass `renderMemoriesPrompt` entirely with your own renderer. */
       render?: (
         memories: Memory[],
-        opts?: { groupNames?: Record<string, string>; template?: PromptTemplate },
+        opts?: { groupNames?: Record<string, string>; template?: PromptTemplate; viewerUserId?: string },
       ) => string;
     } & RequestContext = {},
   ): Promise<RecallResult> {
@@ -288,7 +297,7 @@ export class Memories {
     const render = options.render ?? renderMemoriesPrompt;
     return {
       memories,
-      prompt: render(memories, { groupNames, template: options.template }),
+      prompt: render(memories, { groupNames, template: options.template, viewerUserId: user_id }),
       scopes,
     };
   }

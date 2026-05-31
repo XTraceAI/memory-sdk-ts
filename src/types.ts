@@ -269,6 +269,13 @@ export interface PromptTemplate {
   includeCategories: boolean;
   /** Append `(recorded YYYY-MM-DD)` per line when available. */
   includeRecordedDate: boolean;
+  /**
+   * Prefix each shared (group) line with its author — `"<user_id>: "`, or
+   * `"you: "` when it's the caller's own row — so the agent can tell whose
+   * fact it is in a multi-traveler group. Personal lines are never attributed
+   * (they're always the caller's). Off → group lines carry no author.
+   */
+  includeGroupAuthor: boolean;
 }
 
 // ── Groups (group registry — POST /v1/groups etc.) ─────────────────────────

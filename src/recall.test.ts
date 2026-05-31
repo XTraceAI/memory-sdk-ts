@@ -186,6 +186,22 @@ describe("renderMemoriesPrompt", () => {
     expect(out).toContain("Shared group grp_z:");
   });
 
+  it("attributes shared (group) lines to their author; 'you' for the viewer", () => {
+    const out = renderMemoriesPrompt(
+      [
+        mem("S1", "stays near Shibuya", 0.9, { group_ids: ["grp_tokyo"], user_id: "alice", categories: ["travel"] }),
+        mem("S2", "loves Afuri ramen", 0.8, { group_ids: ["grp_tokyo"], user_id: "bob" }),
+      ],
+      { groupNames: { grp_tokyo: "Tokyo trip 2026" }, viewerUserId: "alice" },
+    );
+    expect(out).toBe(
+      "Relevant memories about the user:\n\n" +
+        "Tokyo trip 2026:\n" +
+        "- you: stays near Shibuya [travel] (recorded 2026-01-01)\n" +
+        "- bob: loves Afuri ramen (recorded 2026-01-01)",
+    );
+  });
+
   it("tags artifacts/episodes by type (with title); facts stay plain", () => {
     const out = renderMemoriesPrompt([
       mem("F", "is vegetarian", 0.9, { categories: ["diet"] }),
@@ -220,6 +236,7 @@ describe("renderMemoriesPrompt", () => {
           typeLabels: { fact: "", artifact: "[doc] ", episode: "[chat] " },
           includeCategories: false,
           includeRecordedDate: false,
+          includeGroupAuthor: false,
         },
       },
     );
