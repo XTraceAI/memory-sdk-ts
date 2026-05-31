@@ -21,10 +21,14 @@ actually released (git tags are just bookkeeping).
    git push origin main
    ```
 
-3. **Authenticate to npm if needed** (publishes as `tristangc`, the `@xtraceai`
-   maintainer):
+3. **Confirm you're logged in as the right npm account.** `npm whoami` only
+   tells you *someone* is logged in — make sure it's `tristangc` (the `@xtraceai`
+   maintainer), not a different cached account, or the next `npm publish` runs
+   under / fails on the wrong user:
    ```bash
-   npm whoami || npm login                     # browser OAuth
+   npm whoami                                  # must print: tristangc
+   # if it prints a different user (or errors):
+   npm logout && npm login                     # browser OAuth — log in as tristangc
    ```
 
 4. **Publish — the real, irreversible step.** The `prepublishOnly` hook runs
