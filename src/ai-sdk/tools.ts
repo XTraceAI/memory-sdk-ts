@@ -33,6 +33,12 @@ export interface MemoryToolsScope {
   user_id: string;
   /** Scope ingests to this conversation. */
   conv_id: string;
+  /**
+   * Optional shared group ids (e.g. the current trip). When set, `search_memory`
+   * returns the user's own memories **plus** the group's shared memories in one
+   * call (via `client.memories.recall`), deduped into a single result.
+   */
+  group_ids?: string[];
 }
 
 export interface MemoryToolsOptions {
@@ -56,6 +62,10 @@ export function memoryTools(
 ) {
   const searchLimit = options.searchLimit ?? 5;
   const includeSave = options.includeSave ?? true;
+  // Normalize the group scope once so the search and save tools agree on it
+  // (a bare string or empty array → "no groups", matching recall's own guard).
+  const groupIds =
+    Array.isArray(scope.group_ids) && scope.group_ids.length > 0 ? scope.group_ids : undefined;
 
   const search_memory = tool({
     description:
@@ -76,11 +86,24 @@ export function memoryTools(
         .describe("How many memories to return. Default 5."),
     }),
     execute: async ({ query, limit }) => {
-      const { data } = await client.memories.search({
-        query,
-        filters: { user_id: scope.user_id },
-        limit: limit ?? searchLimit,
-      });
+      const effectiveLimit = limit ?? searchLimit;
+      // With group_ids in scope, pull personal + shared in one deduped call.
+      const data = groupIds
+        ? (
+            await client.memories.recall({
+              query,
+              user_id: scope.user_id,
+              group_ids: groupIds,
+              limit: effectiveLimit,
+            })
+          ).memories
+        : (
+            await client.memories.search({
+              query,
+              user_id: scope.user_id,
+              limit: effectiveLimit,
+            })
+          ).data;
       return data.map((m) => ({
         id: m.id,
         text: m.text,
@@ -98,7 +121,8 @@ export function memoryTools(
       "Save a durable fact about the user to memory. Use sparingly — " +
       "only for things worth remembering across sessions, written as " +
       "a third-person statement (e.g. \"User prefers concise responses\" " +
-      "or \"User is allergic to peanuts\").",
+      "or \"User is allergic to peanuts\"). When a group scope is set, the " +
+      "fact is offered to the group classifier so it can be shared with the group.",
     inputSchema: z.object({
       fact: z.string().describe("The fact to remember."),
     }),
@@ -108,6 +132,10 @@ export function memoryTools(
           messages: [{ role: "user", content: fact }],
           user_id: scope.user_id,
           conv_id: scope.conv_id,
+          // Tag into the same group(s) search reads from, so model-saved facts
+          // are visible to other members' group recall (the classifier decides
+          // which actually get tagged).
+          ...(groupIds ? { group_ids: groupIds } : {}),
           extract_artifacts: false,
         },
         { wait: true },

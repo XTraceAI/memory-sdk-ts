@@ -25,9 +25,9 @@
 
 `@xtraceai/memory` is the TypeScript SDK for the [xtrace memory API](https://api.production.xtrace.ai) — a hosted memory service for AI agents. Send raw conversation messages and the service extracts structured **facts**, **artifacts**, and **episodes** in the background. Search them later with vector + filter queries to give your agent durable, long-term memory.
 
-- **Ingest** — drop in conversation messages; extraction runs async (or sync for short turns).
-- **Search** — semantic vector search with metadata filters (`user_id`, `conv_id`, …).
-- **Manage** — list, get, update, and soft-delete memories.
+- **Ingest** — drop in conversation messages; extraction runs async (or sync for short turns). Tag memories to shared **groups** for cross-user recall.
+- **Search** — semantic vector search scoped by `user_id` / `group_ids` / `agent_id` / `app_id` (AND-everything). `recall()` merges a user's own memories with a shared group's in one call.
+- **Manage** — list, get, and (hard) delete memories. Register tagging targets with the **groups** API.
 - **Vercel AI SDK** — a drop-in `@xtraceai/memory/ai-sdk` subpath for auto-context and tool-based recall.
 
 Works in Node 18+ (native `fetch`) and in the browser.
@@ -88,10 +88,17 @@ if (sync.status === "succeeded") {
   console.log(sync.result?.memories_created);
 }
 
-// Search
+// Search — scope by what you pass (user_id / group_ids / agent_id / app_id all AND-narrow)
 const results = await client.memories.search({
   query: "what does the user like to eat?",
-  filters: { user_id: "alice" },
+  user_id: "alice",
+});
+
+// Personal + shared (group) recall in one call — see "Groups" below
+const { prompt } = await client.memories.recall({
+  query: "what should we plan for dinner?",
+  user_id: "alice",
+  group_ids: ["grp_tokyo2026"],
 });
 
 // List with auto-pagination
@@ -102,10 +109,7 @@ for await (const memory of client.memories.list({ user_id: "alice" })) {
 // Get one
 const memory = await client.memories.get(results.data[0]!.id);
 
-// Update
-await client.memories.update(memory.id, { text: "Updated content" });
-
-// Delete (soft — sets details.status to "retracted"; hidden from list/search)
+// Delete (hard — the point is removed; get/list/search no longer return it, a second delete 404s)
 await client.memories.delete(memory.id);
 ```
 

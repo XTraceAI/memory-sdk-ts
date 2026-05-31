@@ -1,4 +1,5 @@
 import { defaultHttpConfig, HttpClient } from "./http.js";
+import { Groups } from "./groups.js";
 import { Memories } from "./memories.js";
 
 export interface MemoryClientOptions {
@@ -18,6 +19,7 @@ export interface MemoryClientOptions {
 
 export class MemoryClient {
   readonly memories: Memories;
+  readonly groups: Groups;
 
   constructor(options: MemoryClientOptions) {
     if (!options.apiKey) throw new Error("MemoryClient: apiKey is required");
@@ -34,5 +36,6 @@ export class MemoryClient {
       }),
     );
     this.memories = new Memories(http);
+    this.groups = new Groups(http);
   }
 }

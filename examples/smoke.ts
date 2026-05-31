@@ -96,12 +96,12 @@ async function main() {
   log("5/7 search…");
   const search = await client.memories.search({
     query: "what does the user like to eat?",
-    filters: { user_id: userId },
+    user_id: userId,
     limit: 5,
   });
-  log(`    ${search.data.length} hits, has_more=${search.has_more}`);
+  log(`    ${search.data.length} hits`);
   if (search.data.length === 0) {
-    log("    no search hits — skipping get/update/delete steps");
+    log("    no search hits — skipping get/delete steps");
     log("done (partial) ✓");
     return;
   }
@@ -113,15 +113,14 @@ async function main() {
   if (fetched.id !== first.id) throw new Error("get returned wrong id");
   log("    text:", JSON.stringify(fetched.text).slice(0, 80));
 
-  // 6. Delete (soft-delete per spec) — verify the memory still resolves but is hidden from list/search
-  log("7/7 delete + verify soft-delete semantics");
+  // 6. Delete (hard) — verify the memory is gone: get returns 404 afterwards
+  log("7/7 delete + verify hard-delete semantics");
   await client.memories.delete(first.id);
   const afterDelete = await client.memories.get(first.id).catch((e) => (e instanceof MemoryNotFound ? null : Promise.reject(e)));
   if (afterDelete === null) {
-    log("    note: get returned 404 (hard-delete semantics — spec said soft-delete)");
+    log("    hard-deleted ✓ (get returns 404, point removed)");
   } else {
-    const status = (afterDelete.details as { status?: string }).status;
-    log(`    soft-deleted ✓ (get still works, details.status=${status})`);
+    throw new Error("expected 404 after delete (hard-delete semantics)");
   }
 
   log("done ✓");
