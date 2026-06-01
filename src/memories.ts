@@ -317,25 +317,31 @@ export class Memories {
     const mode = params.mode ?? "compose";
     const limit = params.limit ?? 10;
 
-    // Each pool is one scoped search; recall unions them. Every pool must carry
-    // at least one scope axis (an unscoped search 422s server-side). Reject a
-    // malformed pool LOUDLY rather than silently dropping it: quietly skipping a
-    // pool (a typo'd `group_id`, an empty `group_ids: []`) would return a
-    // plausible-but-incomplete result with the requested scope silently missing.
-    // A caller that wants a pool conditionally should omit it explicitly.
-    const pools = params.pools ?? [];
-    if (pools.length === 0) {
+    // Each pool is one scoped search; recall unions them. Normalize every pool to
+    // its NON-EMPTY axes, then require at least one. Dropping an empty axis (a
+    // dynamically-built `group_ids: []`) keeps recall from forwarding a vacuous
+    // AND-narrowing filter to the server — an empty any-of would turn an
+    // otherwise-personal scope into a match-nothing search. A pool left with no
+    // real axis (a typo'd `group_id`, `{}`) throws LOUDLY rather than being
+    // silently dropped, which would return a result with the requested scope
+    // quietly missing. A caller that wants a pool conditionally should omit it.
+    const rawPools = params.pools ?? [];
+    if (rawPools.length === 0) {
       throw new Error("recall(): `pools` must contain at least one pool");
     }
-    pools.forEach((p, i) => {
-      const hasAxis =
-        p.user_id || (p.group_ids && p.group_ids.length > 0) || p.agent_id || p.app_id;
-      if (!hasAxis) {
+    const pools: ScopePool[] = rawPools.map((p, i) => {
+      const np: ScopePool = {};
+      if (p.user_id) np.user_id = p.user_id;
+      if (p.group_ids && p.group_ids.length > 0) np.group_ids = p.group_ids;
+      if (p.agent_id) np.agent_id = p.agent_id;
+      if (p.app_id) np.app_id = p.app_id;
+      if (!np.user_id && !np.group_ids && !np.agent_id && !np.app_id) {
         throw new Error(
           `recall(): pool at index ${i} has no scope axis — give each pool at ` +
             `least one of user_id, group_ids, agent_id, or app_id`,
         );
       }
+      return np;
     });
 
     const ctx: RequestContext = { signal: options.signal, requestId: options.requestId };

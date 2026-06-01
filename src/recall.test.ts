@@ -388,6 +388,22 @@ describe("Memories.recall — pools (general union)", () => {
     expect(calls).toHaveLength(0); // threw before issuing any search
   });
 
+  it("strips an empty group_ids axis instead of forwarding a vacuous filter", async () => {
+    const { http, calls } = fakeHttp({
+      onSearch: () => [mem("P", "alice note", 0.9, { user_id: "alice" })],
+    });
+    const res = await new Memories(http).recall({
+      query: "q",
+      pools: [{ user_id: "alice", group_ids: [] }],
+    });
+    // The empty group_ids is dropped — the search goes out as a plain personal
+    // scope, NOT `user_id AND (any-of [])` which would match nothing server-side.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.user_id).toBe("alice");
+    expect(calls[0]!.group_ids).toBeUndefined();
+    expect(res.memories.map((m) => m.id)).toEqual(["P"]);
+  });
+
   it("throws when no pool carries a scope axis", async () => {
     const { http } = fakeHttp({});
     await expect(new Memories(http).recall({ query: "q", pools: [{}] })).rejects.toThrow(
