@@ -219,6 +219,22 @@ describe("renderMemoriesPrompt", () => {
     );
   });
 
+  it("leaves single-user personal lines plain when no viewer is given", () => {
+    // Standalone render of one user's own memories: rows carry user_id (real API
+    // rows always do) but no viewerUserId is passed. Lines stay plain — the
+    // author prefix is only for multi-user/group context, not normal personal use.
+    expect(
+      renderMemoriesPrompt([
+        mem("A", "likes thai", 0.9, { user_id: "alice" }),
+        mem("B", "allergic to peanuts", 0.8, { user_id: "alice" }),
+      ]),
+    ).toBe(
+      "Relevant memories about the user:\n" +
+        "- likes thai (recorded 2026-01-01)\n" +
+        "- allergic to peanuts (recorded 2026-01-01)",
+    );
+  });
+
   it("splits personal vs per-group shared sections, labeled by group name", () => {
     const out = renderMemoriesPrompt(
       [

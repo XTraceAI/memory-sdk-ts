@@ -75,10 +75,13 @@ export function renderMemoriesPrompt(
   const isGroupRow = (m: Memory): boolean =>
     (m.group_ids ?? []).some((g) => (requestedSet ? requestedSet.has(g) : true));
 
-  // Attribute a row to its author when it isn't the viewer's — everywhere,
-  // including the Personal section, so unioning multiple user pools never
-  // presents one user's facts as the viewer's. The viewer's own rows get a
-  // "you:" prefix only inside a group section (Personal lines need none).
+  // Attribution rules:
+  //  - In a group section, name the author so members can tell who said what:
+  //    "you:" for the viewer (when known), the user id for everyone else.
+  //  - Outside a group (Personal/flat), attribute only a NON-viewer row, and
+  //    only when a viewer is actually known — so unioning multiple user pools
+  //    never presents one user's facts as the viewer's, while a standalone render
+  //    of a single user's memories (no viewerUserId) stays plain.
   const line = (m: Memory, inGroup: boolean, attribute = true): string => {
     let lead = m.text;
     // Facts render as plain statements; artifacts/episodes get a per-type tag
@@ -89,8 +92,9 @@ export function renderMemoriesPrompt(
     }
     let author = "";
     if (attribute && t.includeGroupAuthor && m.user_id) {
-      if (m.user_id !== opts.viewerUserId) author = `${m.user_id}: `;
-      else if (inGroup) author = "you: ";
+      const isViewer = m.user_id === opts.viewerUserId;
+      if (inGroup) author = isViewer ? "you: " : `${m.user_id}: `;
+      else if (opts.viewerUserId !== undefined && !isViewer) author = `${m.user_id}: `;
     }
     let s = `- ${author}${t.typeLabels[m.type] ?? ""}${lead}`;
     if (t.includeCategories && m.categories && m.categories.length > 0) {
