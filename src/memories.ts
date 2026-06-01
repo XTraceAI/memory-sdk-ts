@@ -11,6 +11,7 @@ import type {
   RecallParams,
   RecallResult,
   RecallScopeStat,
+  ScopePool,
   SearchListEnvelope,
   SearchRequest,
 } from "./types.js";
@@ -236,15 +237,23 @@ export class Memories {
    * can label shared facts by group name rather than opaque id. The lookup is
    * best-effort — on failure the render falls back to id-based labels.
    *
-   * At least one of `user_id` / `group_ids` must be supplied.
+   * Provide `pools` (the general form — any scopes to union), or the convenience
+   * fields `user_id` / `group_ids` (at least one), which recall expands into pools.
    *
    * @example
-   * const { prompt, memories } = await client.memories.recall({
+   * // Convenience form — personal + a group:
+   * const { prompt } = await client.memories.recall({
    *   query: "what should I plan for dinner on the trip?",
    *   user_id: "alice",            // her dietary prefs
    *   group_ids: ["grp_tokyo2026"] // the group's shared restaurant picks
    * });
-   * // inject `prompt` into your agent's context
+   *
+   * @example
+   * // General form — blend any scopes, e.g. personal + a global app_id KB:
+   * const { prompt } = await client.memories.recall({
+   *   query: "how do I reset my key?",
+   *   pools: [{ user_id: "alice" }, { app_id: "product-kb" }],
+   * });
    */
   async recall(
     params: RecallParams,
@@ -263,29 +272,50 @@ export class Memories {
       ) => string;
     } & RequestContext = {},
   ): Promise<RecallResult> {
-    const { query, user_id, group_ids, agent_id, app_id } = params;
+    const { query, agent_id, app_id } = params;
     const mode = params.mode ?? "compose";
     const limit = params.limit ?? 10;
-    const hasGroups = Array.isArray(group_ids) && group_ids.length > 0;
-    if (!user_id && !hasGroups) {
-      throw new Error("recall(): provide at least one of `user_id` or `group_ids`");
+
+    // Resolve the pools to union: explicit `pools`, else derived from the
+    // convenience fields ({user_id,…} and/or {group_ids,…}). Each pool is one
+    // scoped search; recall unions them.
+    let pools: ScopePool[];
+    if (params.pools && params.pools.length > 0) {
+      pools = params.pools;
+    } else {
+      pools = [];
+      if (params.user_id) pools.push({ user_id: params.user_id, agent_id, app_id });
+      if (Array.isArray(params.group_ids) && params.group_ids.length > 0) {
+        pools.push({ group_ids: params.group_ids, agent_id, app_id });
+      }
+    }
+    // Every pool needs at least one scope axis (an unscoped search 422s).
+    pools = pools.filter(
+      (p) => p.user_id || (p.group_ids && p.group_ids.length > 0) || p.agent_id || p.app_id,
+    );
+    if (pools.length === 0) {
+      throw new Error("recall(): provide `pools`, or at least one of `user_id` / `group_ids`");
     }
 
-    const base = { query, agent_id, app_id, mode, limit };
     const ctx: RequestContext = { signal: options.signal, requestId: options.requestId };
 
-    const jobs: Array<{ scope: RecallScopeStat["scope"]; promise: Promise<SearchListEnvelope> }> = [];
-    if (user_id) {
-      jobs.push({ scope: "personal", promise: this.search({ ...base, user_id }, ctx) });
-    }
-    if (hasGroups) {
-      jobs.push({ scope: "shared", promise: this.search({ ...base, group_ids }, ctx) });
-    }
+    // Groups requested across all pools — used to label sections and to keep
+    // non-group pools from bleeding in the user's other groups.
+    const requestedGroupIds = [...new Set(pools.flatMap((p) => p.group_ids ?? []))];
+    const requestedSet = requestedGroupIds.length > 0 ? new Set(requestedGroupIds) : null;
+    const viewerUserId = params.user_id ?? pools.find((p) => p.user_id)?.user_id;
+    const poolLabel = (p: ScopePool): string =>
+      p.group_ids && p.group_ids.length > 0 ? "shared" : p.user_id ? "personal" : "scope";
 
-    // Resolve group id → name from the registry (when there are groups to label),
-    // in parallel with the searches. Best-effort: on failure, fall back to {} so
+    const jobs = pools.map((pool) => ({
+      pool,
+      promise: this.search({ query, mode, limit, ...pool }, ctx),
+    }));
+
+    // Resolve group id → name from the registry when any pool targets a group,
+    // in parallel with the searches. Best-effort: on failure fall back to {} so
     // the render uses id-based labels rather than failing the whole recall.
-    const namesJob: Promise<Record<string, string>> = hasGroups
+    const namesJob: Promise<Record<string, string>> = requestedSet
       ? this.http
           .request<GroupListEnvelope>("GET", "/v1/groups", {
             signal: options.signal,
@@ -296,29 +326,30 @@ export class Memories {
       : Promise.resolve({});
 
     const [envelopes, groupNames] = await Promise.all([
-      Promise.all(jobs.map(async (j) => ({ scope: j.scope, env: await j.promise }))),
+      Promise.all(jobs.map(async (j) => ({ pool: j.pool, env: await j.promise }))),
       namesJob,
     ]);
 
-    // Per-scope deduped, score-ordered lists, plus the higher-scored copy of any
-    // row that appears in both scopes.
-    const requestedSet = hasGroups ? new Set(group_ids) : null;
+    // Per-pool deduped, score-ordered lists, plus the higher-scored copy of any
+    // row that appears in more than one pool.
     const scopes: RecallScopeStat[] = [];
     const bestById = new Map<string, Memory>();
     const lists: Memory[][] = [];
-    for (const { scope, env } of envelopes) {
+    for (const { pool, env } of envelopes) {
       let rows = env.data ?? [];
-      // Group recall: the personal scope is "my GENERAL memories", so drop the
-      // caller's rows tagged solely to OTHER (non-requested) groups — otherwise a
-      // recall for one trip bleeds in facts from the user's other trips. Untagged
-      // rows and requested-group rows stay. (A personal-only recall keeps all.)
-      if (scope === "personal" && requestedSet) {
+      // A pool without group_ids returns the scope's rows regardless of their
+      // group tags. When the recall targets groups, drop rows tagged solely to
+      // OTHER (non-requested) groups so a personal/app pool doesn't bleed in the
+      // user's other trips. Untagged + requested-group rows stay; with no groups
+      // requested, nothing is filtered.
+      const poolHasGroups = !!(pool.group_ids && pool.group_ids.length > 0);
+      if (requestedSet && !poolHasGroups) {
         rows = rows.filter((m) => {
           const gids = m.group_ids ?? [];
           return gids.length === 0 || gids.some((g) => requestedSet.has(g));
         });
       }
-      scopes.push({ scope, count: rows.length });
+      scopes.push({ scope: poolLabel(pool), count: rows.length });
       for (const m of rows) {
         const ex = bestById.get(m.id);
         if (!ex || (m.score ?? -Infinity) > (ex.score ?? -Infinity)) bestById.set(m.id, m);
@@ -359,8 +390,8 @@ export class Memories {
       prompt: render(memories, {
         groupNames,
         template: options.template,
-        viewerUserId: user_id,
-        requestedGroupIds: group_ids ?? [],
+        viewerUserId,
+        requestedGroupIds,
       }),
       scopes,
     };

@@ -206,20 +206,43 @@ export interface SearchRequest {
   filters?: Filter;
 }
 
-/** Parameters for {@link Memories.recall} — a personal + shared (group) read. */
+/**
+ * One scoped search whose results {@link Memories.recall} unions with the others.
+ * Axes within a pool **AND** together (a normal scoped search); recall **unions**
+ * the pools, dedupes, ranks, and renders one prompt.
+ */
+export interface ScopePool {
+  user_id?: string;
+  group_ids?: string[];
+  agent_id?: string;
+  app_id?: string;
+}
+
+/** Parameters for {@link Memories.recall} — a union of independent scope pools. */
 export interface RecallParams {
   /** Natural-language query, embedded server-side. */
   query: string;
-  /** Personal scope. Include to pull the caller's own memories. */
+  /** Convenience: personal scope. Pulls the caller's own memories. */
   user_id?: string;
-  /** Shared scope. Include to pull group-tagged memories (any-of). */
+  /** Convenience: shared scope. Pulls group-tagged memories (any-of). */
   group_ids?: string[];
-  /** Optional agent scope — AND-narrows every sub-search. */
+  /** Convenience: agent scope — AND-narrows the convenience pools below. */
   agent_id?: string;
-  /** Optional app scope — AND-narrows every sub-search. */
+  /** Convenience: app scope — AND-narrows the convenience pools below. */
   app_id?: string;
   /**
-   * Per-scope search mode. `"compose"` (default) returns each scope's
+   * Explicit pools to union — the general form. Each pool is a scoped search
+   * (its axes AND together); recall unions the pools. Use it to blend *any*
+   * scopes, e.g. personal + a global `app_id` knowledge base:
+   * `pools: [{ user_id: "alice" }, { app_id: "product-kb" }]`.
+   *
+   * When omitted, recall derives pools from the convenience fields:
+   * `{ user_id, agent_id, app_id }` (when `user_id` is set) and/or
+   * `{ group_ids, agent_id, app_id }` (when `group_ids` is set).
+   */
+  pools?: ScopePool[];
+  /**
+   * Per-pool search mode. `"compose"` (default) returns each pool's
    * agent-filtered rows — recommended, since recall dedupes those into one
    * prompt. `"retrieve"` returns raw rows (no LLM filtering).
    */
@@ -228,10 +251,11 @@ export interface RecallParams {
   limit?: number;
 }
 
-/** Per-scope diagnostic returned by {@link Memories.recall}. */
+/** Per-pool diagnostic returned by {@link Memories.recall}. */
 export interface RecallScopeStat {
-  scope: "personal" | "shared";
-  /** Rows this scope contributed before the cross-scope dedupe. */
+  /** Pool label: `"personal"` (user-only), `"shared"` (has group_ids), else `"scope"`. */
+  scope: string;
+  /** Rows this pool contributed before the cross-pool dedupe. */
   count: number;
 }
 

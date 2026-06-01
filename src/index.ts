@@ -50,6 +50,7 @@ export type {
   RecallParams,
   RecallResult,
   RecallScopeStat,
+  ScopePool,
   Role,
   SearchListEnvelope,
   SearchMode,

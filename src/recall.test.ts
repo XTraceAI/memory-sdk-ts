@@ -329,3 +329,75 @@ describe("renderMemoriesPrompt", () => {
     expect(renderMemoriesPrompt([])).toBe("");
   });
 });
+
+describe("Memories.recall — pools (general union)", () => {
+  const grp = (id: string, name: string) => ({
+    object: "group" as const,
+    id,
+    name,
+    prompt: "",
+    status: "active" as const,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: null,
+  });
+
+  it("unions explicit pools — personal + a global app_id KB", async () => {
+    const { http, calls } = fakeHttp({
+      onSearch: (body) =>
+        body.app_id === "product-kb"
+          ? [mem("K", "reset your key in settings", 0.95, { app_id: "product-kb" })]
+          : [mem("P", "alice prefers dark mode", 0.7, { user_id: "alice" })],
+    });
+    const res = await new Memories(http).recall({
+      query: "how do I reset my key?",
+      pools: [{ user_id: "alice" }, { app_id: "product-kb" }],
+    });
+    // one search per pool, each scoped to just its own axis
+    expect(calls).toHaveLength(2);
+    expect(calls.some((c) => c.user_id === "alice" && !c.app_id && !c.group_ids)).toBe(true);
+    expect(calls.some((c) => c.app_id === "product-kb" && !c.user_id && !c.group_ids)).toBe(true);
+    // both pools' rows unioned; no group pool → no group sections
+    expect(res.memories.map((m) => m.id).sort()).toEqual(["K", "P"]);
+    expect(res.scopes.map((s) => s.scope).sort()).toEqual(["personal", "scope"]);
+  });
+
+  it("throws when no pool carries a scope axis", async () => {
+    const { http } = fakeHttp({});
+    await expect(new Memories(http).recall({ query: "q", pools: [{}] })).rejects.toThrow(
+      /pools|at least one/,
+    );
+  });
+
+  it("a non-group pool doesn't bleed in other groups when a group pool is present", async () => {
+    const { http } = fakeHttp({
+      onSearch: (body) =>
+        body.group_ids
+          ? [mem("G", "shibuya hotel", 0.8, { group_ids: ["grp_tokyo"], user_id: "bob" })]
+          : [
+              mem("UA", "alice tokyo note", 0.9, { group_ids: ["grp_tokyo"], user_id: "alice" }),
+              mem("UB", "alice paris note", 0.85, { group_ids: ["grp_paris"], user_id: "alice" }),
+            ],
+      groups: [grp("grp_tokyo", "Tokyo trip")],
+    });
+    const res = await new Memories(http).recall({
+      query: "q",
+      pools: [{ user_id: "alice" }, { group_ids: ["grp_tokyo"] }],
+    });
+    const ids = res.memories.map((m) => m.id);
+    expect(ids).toContain("UA"); // alice's tokyo row kept
+    expect(ids).toContain("G"); // group pool's row kept
+    expect(ids).not.toContain("UB"); // alice's paris row dropped — no cross-group bleed
+    expect(res.prompt).toContain("Tokyo trip:");
+  });
+
+  it("legacy { user_id, group_ids } still expands to pools", async () => {
+    const { http, calls } = fakeHttp({
+      onSearch: (body) =>
+        body.user_id && !body.group_ids ? [mem("P", "p", 0.6)] : [mem("S", "s", 0.7, { group_ids: ["grp_x"] })],
+    });
+    const res = await new Memories(http).recall({ query: "q", user_id: "alice", group_ids: ["grp_x"] });
+    expect(calls).toHaveLength(2);
+    expect(res.scopes.map((s) => s.scope)).toEqual(["personal", "shared"]);
+    expect(res.memories.map((m) => m.id).sort()).toEqual(["P", "S"]);
+  });
+});
