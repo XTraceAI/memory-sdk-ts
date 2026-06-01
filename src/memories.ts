@@ -68,8 +68,10 @@ export function renderMemoriesPrompt(
   const isGroupRow = (m: Memory): boolean =>
     (m.group_ids ?? []).some((g) => (requestedSet ? requestedSet.has(g) : true));
 
-  // `inGroup`: attribute shared lines to their author (a cross-user group read
-  // mixes travelers). Personal lines are always the caller's, so never attributed.
+  // Attribute a row to its author when it isn't the viewer's — everywhere,
+  // including the Personal section, so unioning multiple user pools never
+  // presents one user's facts as the viewer's. The viewer's own rows get a
+  // "you:" prefix only inside a group section (Personal lines need none).
   const line = (m: Memory, inGroup: boolean): string => {
     let lead = m.text;
     // Facts render as plain statements; artifacts/episodes get a per-type tag
@@ -79,8 +81,9 @@ export function renderMemoriesPrompt(
       lead = `${m.details.title}: ${m.text}`;
     }
     let author = "";
-    if (inGroup && t.includeGroupAuthor && m.user_id) {
-      author = `${m.user_id === opts.viewerUserId ? "you" : m.user_id}: `;
+    if (t.includeGroupAuthor && m.user_id) {
+      if (m.user_id !== opts.viewerUserId) author = `${m.user_id}: `;
+      else if (inGroup) author = "you: ";
     }
     let s = `- ${author}${t.typeLabels[m.type] ?? ""}${lead}`;
     if (t.includeCategories && m.categories && m.categories.length > 0) {
@@ -324,13 +327,14 @@ export class Memories {
     const lists: Memory[][] = [];
     for (const { pool, env } of envelopes) {
       let rows = env.data ?? [];
-      // A pool without group_ids returns the scope's rows regardless of their
-      // group tags. When the recall targets groups, drop rows tagged solely to
-      // OTHER (non-requested) groups so a personal/app pool doesn't bleed in the
-      // user's other trips. Untagged + requested-group rows stay; with no groups
-      // requested, nothing is filtered.
+      // A USER pool returns the caller's rows across ALL their groups. When the
+      // recall targets groups, drop that pool's rows tagged solely to OTHER
+      // (non-requested) groups so the user's other trips don't bleed in. Only a
+      // user pool is filtered — an app/agent pool was scoped deliberately, so
+      // keep its rows whatever group tags they carry. (No groups requested →
+      // nothing filtered.)
       const poolHasGroups = !!(pool.group_ids && pool.group_ids.length > 0);
-      if (requestedSet && !poolHasGroups) {
+      if (requestedSet && pool.user_id && !poolHasGroups) {
         rows = rows.filter((m) => {
           const gids = m.group_ids ?? [];
           return gids.length === 0 || gids.some((g) => requestedSet.has(g));

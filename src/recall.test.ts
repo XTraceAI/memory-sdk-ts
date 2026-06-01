@@ -384,4 +384,40 @@ describe("Memories.recall — pools (general union)", () => {
     expect(ids).not.toContain("UB"); // alice's paris row dropped — no cross-group bleed
     expect(res.prompt).toContain("Tokyo trip:");
   });
+
+  it("keeps a non-user pool's rows even if they carry an unrelated group tag", async () => {
+    const { http } = fakeHttp({
+      onSearch: (body) =>
+        body.group_ids
+          ? [mem("T", "trip fact", 0.7, { group_ids: ["grp_trip"] })]
+          : [mem("K", "kb doc", 0.9, { app_id: "kb", group_ids: ["grp_docs"] })],
+      groups: [grp("grp_trip", "Trip")],
+    });
+    const res = await new Memories(http).recall({
+      query: "q",
+      pools: [{ app_id: "kb" }, { group_ids: ["grp_trip"] }],
+    });
+    const ids = res.memories.map((m) => m.id);
+    // The bleed filter is user-pool-only: the app pool's row stays even though it
+    // carries grp_docs (not the requested grp_trip).
+    expect(ids).toContain("K");
+    expect(ids).toContain("T");
+  });
+
+  it("attributes a second user pool's rows (not presented as the viewer's)", async () => {
+    const { http } = fakeHttp({
+      onSearch: (body) =>
+        body.user_id === "bob"
+          ? [mem("B", "bob likes ramen", 0.8, { user_id: "bob" })]
+          : [mem("A", "alice likes thai", 0.9, { user_id: "alice" })],
+    });
+    const res = await new Memories(http).recall({
+      query: "q",
+      pools: [{ user_id: "alice" }, { user_id: "bob" }],
+    });
+    // viewer = first user pool (alice): her line unattributed, bob's attributed.
+    expect(res.prompt).toContain("- alice likes thai");
+    expect(res.prompt).toContain("- bob: bob likes ramen");
+    expect(res.prompt).not.toContain("you:"); // no group sections here
+  });
 });
