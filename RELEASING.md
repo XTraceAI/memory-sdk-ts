@@ -16,8 +16,8 @@ actually released (git tags are just bookkeeping).
    edit — a bare `git commit -am` reports "nothing to commit" if you skip it.
    Let npm do the edit (no tag yet — we tag after publishing):
    ```bash
-   npm version 0.3.0 --no-git-tag-version      # edits package.json only
-   git commit -am "release: v0.3.0"
+   npm version 0.2.1 --no-git-tag-version      # edits package.json only
+   git commit -am "release: v0.2.1"
    git push origin main
    ```
 
@@ -36,14 +36,14 @@ actually released (git tags are just bookkeeping).
    required because the package is scoped (`@xtraceai/…`).
    ```bash
    npm publish --access public
-   npm view @xtraceai/memory version           # confirm → 0.3.0
+   npm view @xtraceai/memory version           # confirm → 0.2.1
    ```
 
 5. **Tag the release commit — _only after_ npm confirms the version.** Tagging
    before a successful publish is how tags get orphaned (a `vX.Y.Z` tag pointing
    at a version that never shipped).
    ```bash
-   git tag v0.3.0 && git push origin v0.3.0
+   git tag v0.2.1 && git push origin v0.2.1
    ```
 
 ## Notes

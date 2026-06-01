@@ -94,11 +94,10 @@ const results = await client.memories.search({
   user_id: "alice",
 });
 
-// Personal + shared (group) recall in one call — see "Groups" below
+// Personal + shared (group) recall in one call — unions the pools you pass
 const { prompt } = await client.memories.recall({
   query: "what should we plan for dinner?",
-  user_id: "alice",
-  group_ids: ["grp_tokyo2026"],
+  pools: [{ user_id: "alice" }, { group_ids: ["grp_tokyo2026"] }],
 });
 
 // List with auto-pagination

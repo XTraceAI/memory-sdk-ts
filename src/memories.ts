@@ -11,6 +11,7 @@ import type {
   RecallParams,
   RecallResult,
   RecallScopeStat,
+  ScopePool,
   SearchListEnvelope,
   SearchRequest,
 } from "./types.js";
@@ -56,6 +57,13 @@ export function renderMemoriesPrompt(
      * When omitted, every group tag present gets a section (back-compat).
      */
     requestedGroupIds?: string[];
+    /**
+     * Per-row source labels for rows from a non-user, non-group pool (e.g. an
+     * `app_id`/`agent_id` knowledge-base pool). Such rows render under their own
+     * labeled section instead of the user's Personal section, so a KB doc isn't
+     * framed as the user's own memory.
+     */
+    sourceLabels?: Record<string, string>;
   } = {},
 ): string {
   if (memories.length === 0) return "";
@@ -67,9 +75,14 @@ export function renderMemoriesPrompt(
   const isGroupRow = (m: Memory): boolean =>
     (m.group_ids ?? []).some((g) => (requestedSet ? requestedSet.has(g) : true));
 
-  // `inGroup`: attribute shared lines to their author (a cross-user group read
-  // mixes travelers). Personal lines are always the caller's, so never attributed.
-  const line = (m: Memory, inGroup: boolean): string => {
+  // Attribution rules:
+  //  - In a group section, name the author so members can tell who said what:
+  //    "you:" for the viewer (when known), the user id for everyone else.
+  //  - Outside a group (Personal/flat), attribute only a NON-viewer row, and
+  //    only when a viewer is actually known — so unioning multiple user pools
+  //    never presents one user's facts as the viewer's, while a standalone render
+  //    of a single user's memories (no viewerUserId) stays plain.
+  const line = (m: Memory, inGroup: boolean, attribute = true): string => {
     let lead = m.text;
     // Facts render as plain statements; artifacts/episodes get a per-type tag
     // (from the template) + their title, so the agent can tell a document or a
@@ -78,8 +91,10 @@ export function renderMemoriesPrompt(
       lead = `${m.details.title}: ${m.text}`;
     }
     let author = "";
-    if (inGroup && t.includeGroupAuthor && m.user_id) {
-      author = `${m.user_id === opts.viewerUserId ? "you" : m.user_id}: `;
+    if (attribute && t.includeGroupAuthor && m.user_id) {
+      const isViewer = m.user_id === opts.viewerUserId;
+      if (inGroup) author = isViewer ? "you: " : `${m.user_id}: `;
+      else if (opts.viewerUserId !== undefined && !isViewer) author = `${m.user_id}: `;
     }
     let s = `- ${author}${t.typeLabels[m.type] ?? ""}${lead}`;
     if (t.includeCategories && m.categories && m.categories.length > 0) {
@@ -90,11 +105,20 @@ export function renderMemoriesPrompt(
     return s;
   };
 
-  const personal = memories.filter((m) => !isGroupRow(m));
-  const shared = memories.filter((m) => isGroupRow(m));
+  const sourceLabels = opts.sourceLabels ?? {};
+  // A row from a non-user, non-group "source" pool (an app/agent knowledge base)
+  // gets its own labeled section rather than being framed as the user's memory.
+  // Group membership wins: a source row that's also tagged to a requested group
+  // still renders under that group.
+  const sourceLabelOf = (m: Memory): string | undefined =>
+    isGroupRow(m) ? undefined : sourceLabels[m.id];
 
-  // No sectionable group rows → a flat list reads cleaner than a lone section.
-  if (shared.length === 0) {
+  const personal = memories.filter((m) => !isGroupRow(m) && !sourceLabelOf(m));
+  const shared = memories.filter((m) => isGroupRow(m));
+  const sourced = memories.filter((m) => sourceLabelOf(m) !== undefined);
+
+  // Only personal rows → a flat list reads cleaner than a lone section.
+  if (shared.length === 0 && sourced.length === 0) {
     return `${t.header}\n${memories.map((m) => line(m, false)).join("\n")}`;
   }
 
@@ -117,6 +141,20 @@ export function renderMemoriesPrompt(
     }
   }
 
+  // Bucket source rows by their label (e.g. an app_id KB), first-appearance order.
+  const sourceOrder: string[] = [];
+  const bySource = new Map<string, Memory[]>();
+  for (const m of sourced) {
+    const lbl = sourceLabelOf(m)!;
+    let bucket = bySource.get(lbl);
+    if (!bucket) {
+      bucket = [];
+      bySource.set(lbl, bucket);
+      sourceOrder.push(lbl);
+    }
+    bucket.push(m);
+  }
+
   const sections: string[] = [];
   if (personal.length > 0) {
     sections.push(`${t.personalLabel}:\n${personal.map((m) => line(m, false)).join("\n")}`);
@@ -124,6 +162,10 @@ export function renderMemoriesPrompt(
   for (const gid of order) {
     const label = groupNames[gid] || t.unknownGroupLabel.replace("{id}", gid);
     sections.push(`${label}:\n${byGroup.get(gid)!.map((m) => line(m, true)).join("\n")}`);
+  }
+  for (const lbl of sourceOrder) {
+    // Source rows aren't author-attributed — the section header names the source.
+    sections.push(`${lbl}:\n${bySource.get(lbl)!.map((m) => line(m, false, false)).join("\n")}`);
   }
   return [t.header, ...sections].join("\n\n");
 }
@@ -236,15 +278,22 @@ export class Memories {
    * can label shared facts by group name rather than opaque id. The lookup is
    * best-effort — on failure the render falls back to id-based labels.
    *
-   * At least one of `user_id` / `group_ids` must be supplied.
+   * Pass `pools` — the scopes to union. Axes within a pool AND; pools OR. At
+   * least one pool (each with ≥1 axis) is required.
    *
    * @example
-   * const { prompt, memories } = await client.memories.recall({
+   * // personal + a group ("my stuff OR the trip's stuff"):
+   * const { prompt } = await client.memories.recall({
    *   query: "what should I plan for dinner on the trip?",
-   *   user_id: "alice",            // her dietary prefs
-   *   group_ids: ["grp_tokyo2026"] // the group's shared restaurant picks
+   *   pools: [{ user_id: "alice" }, { group_ids: ["grp_tokyo2026"] }],
    * });
-   * // inject `prompt` into your agent's context
+   *
+   * @example
+   * // personal + a global app_id knowledge base:
+   * const { prompt } = await client.memories.recall({
+   *   query: "how do I reset my key?",
+   *   pools: [{ user_id: "alice" }, { app_id: "product-kb" }],
+   * });
    */
   async recall(
     params: RecallParams,
@@ -259,33 +308,71 @@ export class Memories {
           template?: PromptTemplate;
           viewerUserId?: string;
           requestedGroupIds?: string[];
+          sourceLabels?: Record<string, string>;
         },
       ) => string;
     } & RequestContext = {},
   ): Promise<RecallResult> {
-    const { query, user_id, group_ids, agent_id, app_id } = params;
+    const { query } = params;
     const mode = params.mode ?? "compose";
     const limit = params.limit ?? 10;
-    const hasGroups = Array.isArray(group_ids) && group_ids.length > 0;
-    if (!user_id && !hasGroups) {
-      throw new Error("recall(): provide at least one of `user_id` or `group_ids`");
-    }
 
-    const base = { query, agent_id, app_id, mode, limit };
+    // Each pool is one scoped search; recall unions them. Normalize every pool to
+    // its NON-EMPTY axes, then require at least one. Dropping an empty axis (a
+    // dynamically-built `group_ids: []`) keeps recall from forwarding a vacuous
+    // AND-narrowing filter to the server — an empty any-of would turn an
+    // otherwise-personal scope into a match-nothing search. A pool left with no
+    // real axis (a typo'd `group_id`, `{}`) throws LOUDLY rather than being
+    // silently dropped, which would return a result with the requested scope
+    // quietly missing. A caller that wants a pool conditionally should omit it.
+    const rawPools = params.pools ?? [];
+    if (rawPools.length === 0) {
+      throw new Error("recall(): `pools` must contain at least one pool");
+    }
+    const pools: ScopePool[] = rawPools.map((p, i) => {
+      // Guard JS callers (no compiler): a bare string group_ids has `.length`, so
+      // without this it would masquerade as a non-empty axis and forward an
+      // invalid (non-array) scope to the server. Reject it explicitly.
+      const gids = p.group_ids as unknown;
+      if (gids != null && !Array.isArray(gids)) {
+        throw new Error(
+          `recall(): pool at index ${i} has a non-array group_ids — it must be ` +
+            `an array of group id strings`,
+        );
+      }
+      const np: ScopePool = {};
+      if (p.user_id) np.user_id = p.user_id;
+      if (p.group_ids && p.group_ids.length > 0) np.group_ids = p.group_ids;
+      if (p.agent_id) np.agent_id = p.agent_id;
+      if (p.app_id) np.app_id = p.app_id;
+      if (!np.user_id && !np.group_ids && !np.agent_id && !np.app_id) {
+        throw new Error(
+          `recall(): pool at index ${i} has no scope axis — give each pool at ` +
+            `least one of user_id, group_ids, agent_id, or app_id`,
+        );
+      }
+      return np;
+    });
+
     const ctx: RequestContext = { signal: options.signal, requestId: options.requestId };
 
-    const jobs: Array<{ scope: RecallScopeStat["scope"]; promise: Promise<SearchListEnvelope> }> = [];
-    if (user_id) {
-      jobs.push({ scope: "personal", promise: this.search({ ...base, user_id }, ctx) });
-    }
-    if (hasGroups) {
-      jobs.push({ scope: "shared", promise: this.search({ ...base, group_ids }, ctx) });
-    }
+    // Groups requested across all pools — used to label sections and to keep
+    // non-group pools from bleeding in the user's other groups.
+    const requestedGroupIds = [...new Set(pools.flatMap((p) => p.group_ids ?? []))];
+    const requestedSet = requestedGroupIds.length > 0 ? new Set(requestedGroupIds) : null;
+    const viewerUserId = pools.find((p) => p.user_id)?.user_id;
+    const poolLabel = (p: ScopePool): string =>
+      p.group_ids && p.group_ids.length > 0 ? "shared" : p.user_id ? "personal" : "scope";
 
-    // Resolve group id → name from the registry (when there are groups to label),
-    // in parallel with the searches. Best-effort: on failure, fall back to {} so
+    const jobs = pools.map((pool) => ({
+      pool,
+      promise: this.search({ query, mode, limit, ...pool }, ctx),
+    }));
+
+    // Resolve group id → name from the registry when any pool targets a group,
+    // in parallel with the searches. Best-effort: on failure fall back to {} so
     // the render uses id-based labels rather than failing the whole recall.
-    const namesJob: Promise<Record<string, string>> = hasGroups
+    const namesJob: Promise<Record<string, string>> = requestedSet
       ? this.http
           .request<GroupListEnvelope>("GET", "/v1/groups", {
             signal: options.signal,
@@ -296,34 +383,53 @@ export class Memories {
       : Promise.resolve({});
 
     const [envelopes, groupNames] = await Promise.all([
-      Promise.all(jobs.map(async (j) => ({ scope: j.scope, env: await j.promise }))),
+      Promise.all(jobs.map(async (j) => ({ pool: j.pool, env: await j.promise }))),
       namesJob,
     ]);
 
-    // Per-scope deduped, score-ordered lists, plus the higher-scored copy of any
-    // row that appears in both scopes.
-    const requestedSet = hasGroups ? new Set(group_ids) : null;
+    // Per-pool deduped, score-ordered lists, plus the higher-scored copy of any
+    // row that appears in more than one pool.
     const scopes: RecallScopeStat[] = [];
     const bestById = new Map<string, Memory>();
     const lists: Memory[][] = [];
-    for (const { scope, env } of envelopes) {
+    // Rows from a non-user, non-group pool (an app/agent KB) carry a source label
+    // so the prompt sections them on their own instead of as the user's memories.
+    const userRowIds = new Set<string>();
+    const sourceLabels: Record<string, string> = {};
+    for (const { pool, env } of envelopes) {
       let rows = env.data ?? [];
-      // Group recall: the personal scope is "my GENERAL memories", so drop the
-      // caller's rows tagged solely to OTHER (non-requested) groups — otherwise a
-      // recall for one trip bleeds in facts from the user's other trips. Untagged
-      // rows and requested-group rows stay. (A personal-only recall keeps all.)
-      if (scope === "personal" && requestedSet) {
+      // A PLAIN personal pool ({ user_id } with no other axis) returns the
+      // caller's rows across ALL their groups. When the recall targets groups,
+      // drop that pool's rows tagged solely to OTHER (non-requested) groups so
+      // the user's other trips don't bleed in. Only the plain personal pool gets
+      // this convenience: any extra axis (app_id/agent_id) — or a group pool — is
+      // a deliberate scope, so its rows are returned exactly as the axes select
+      // (AND-within-pool), even when tagged to a non-requested group. (No groups
+      // requested → nothing filtered.)
+      const poolHasGroups = !!(pool.group_ids && pool.group_ids.length > 0);
+      const isPlainUserPool =
+        !!pool.user_id && !poolHasGroups && !pool.app_id && !pool.agent_id;
+      if (requestedSet && isPlainUserPool) {
         rows = rows.filter((m) => {
           const gids = m.group_ids ?? [];
           return gids.length === 0 || gids.some((g) => requestedSet.has(g));
         });
       }
-      scopes.push({ scope, count: rows.length });
+      // An app/agent-only pool is a "source" — label its rows for sectioning.
+      const sourceLabel =
+        !pool.user_id && !poolHasGroups ? (pool.app_id ?? pool.agent_id) : undefined;
+      scopes.push({ scope: poolLabel(pool), count: rows.length });
       for (const m of rows) {
+        if (pool.user_id) userRowIds.add(m.id);
+        else if (sourceLabel && !(m.id in sourceLabels)) sourceLabels[m.id] = sourceLabel;
         const ex = bestById.get(m.id);
         if (!ex || (m.score ?? -Infinity) > (ex.score ?? -Infinity)) bestById.set(m.id, m);
       }
       lists.push([...rows].sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity)));
+    }
+    // A row that also came from a user pool is the user's own — not a source row.
+    for (const id of Object.keys(sourceLabels)) {
+      if (userRowIds.has(id)) delete sourceLabels[id];
     }
 
     // Order scopes by their top score, THEN round-robin across them. The
@@ -359,8 +465,9 @@ export class Memories {
       prompt: render(memories, {
         groupNames,
         template: options.template,
-        viewerUserId: user_id,
-        requestedGroupIds: group_ids ?? [],
+        viewerUserId,
+        requestedGroupIds,
+        sourceLabels,
       }),
       scopes,
     };

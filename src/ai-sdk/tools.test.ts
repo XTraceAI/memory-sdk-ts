@@ -37,7 +37,10 @@ describe("memoryTools group scope", () => {
     await exec((tools as { save_memory: unknown }).save_memory, { fact: "f" });
 
     expect(calls.recall).toHaveLength(1);
-    expect((calls.recall[0] as { group_ids?: string[] }).group_ids).toEqual(["grp_x"]);
+    expect((calls.recall[0] as { pools?: unknown[] }).pools).toEqual([
+      { user_id: "alice" },
+      { group_ids: ["grp_x"] },
+    ]);
     expect(calls.search).toHaveLength(0);
     expect(calls.ingest).toHaveLength(1);
     expect((calls.ingest[0] as { group_ids?: string[] }).group_ids).toEqual(["grp_x"]);
