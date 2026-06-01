@@ -57,6 +57,13 @@ export function renderMemoriesPrompt(
      * When omitted, every group tag present gets a section (back-compat).
      */
     requestedGroupIds?: string[];
+    /**
+     * Per-row source labels for rows from a non-user, non-group pool (e.g. an
+     * `app_id`/`agent_id` knowledge-base pool). Such rows render under their own
+     * labeled section instead of the user's Personal section, so a KB doc isn't
+     * framed as the user's own memory.
+     */
+    sourceLabels?: Record<string, string>;
   } = {},
 ): string {
   if (memories.length === 0) return "";
@@ -72,7 +79,7 @@ export function renderMemoriesPrompt(
   // including the Personal section, so unioning multiple user pools never
   // presents one user's facts as the viewer's. The viewer's own rows get a
   // "you:" prefix only inside a group section (Personal lines need none).
-  const line = (m: Memory, inGroup: boolean): string => {
+  const line = (m: Memory, inGroup: boolean, attribute = true): string => {
     let lead = m.text;
     // Facts render as plain statements; artifacts/episodes get a per-type tag
     // (from the template) + their title, so the agent can tell a document or a
@@ -81,7 +88,7 @@ export function renderMemoriesPrompt(
       lead = `${m.details.title}: ${m.text}`;
     }
     let author = "";
-    if (t.includeGroupAuthor && m.user_id) {
+    if (attribute && t.includeGroupAuthor && m.user_id) {
       if (m.user_id !== opts.viewerUserId) author = `${m.user_id}: `;
       else if (inGroup) author = "you: ";
     }
@@ -94,11 +101,20 @@ export function renderMemoriesPrompt(
     return s;
   };
 
-  const personal = memories.filter((m) => !isGroupRow(m));
-  const shared = memories.filter((m) => isGroupRow(m));
+  const sourceLabels = opts.sourceLabels ?? {};
+  // A row from a non-user, non-group "source" pool (an app/agent knowledge base)
+  // gets its own labeled section rather than being framed as the user's memory.
+  // Group membership wins: a source row that's also tagged to a requested group
+  // still renders under that group.
+  const sourceLabelOf = (m: Memory): string | undefined =>
+    isGroupRow(m) ? undefined : sourceLabels[m.id];
 
-  // No sectionable group rows → a flat list reads cleaner than a lone section.
-  if (shared.length === 0) {
+  const personal = memories.filter((m) => !isGroupRow(m) && !sourceLabelOf(m));
+  const shared = memories.filter((m) => isGroupRow(m));
+  const sourced = memories.filter((m) => sourceLabelOf(m) !== undefined);
+
+  // Only personal rows → a flat list reads cleaner than a lone section.
+  if (shared.length === 0 && sourced.length === 0) {
     return `${t.header}\n${memories.map((m) => line(m, false)).join("\n")}`;
   }
 
@@ -121,6 +137,20 @@ export function renderMemoriesPrompt(
     }
   }
 
+  // Bucket source rows by their label (e.g. an app_id KB), first-appearance order.
+  const sourceOrder: string[] = [];
+  const bySource = new Map<string, Memory[]>();
+  for (const m of sourced) {
+    const lbl = sourceLabelOf(m)!;
+    let bucket = bySource.get(lbl);
+    if (!bucket) {
+      bucket = [];
+      bySource.set(lbl, bucket);
+      sourceOrder.push(lbl);
+    }
+    bucket.push(m);
+  }
+
   const sections: string[] = [];
   if (personal.length > 0) {
     sections.push(`${t.personalLabel}:\n${personal.map((m) => line(m, false)).join("\n")}`);
@@ -128,6 +158,10 @@ export function renderMemoriesPrompt(
   for (const gid of order) {
     const label = groupNames[gid] || t.unknownGroupLabel.replace("{id}", gid);
     sections.push(`${label}:\n${byGroup.get(gid)!.map((m) => line(m, true)).join("\n")}`);
+  }
+  for (const lbl of sourceOrder) {
+    // Source rows aren't author-attributed — the section header names the source.
+    sections.push(`${lbl}:\n${bySource.get(lbl)!.map((m) => line(m, false, false)).join("\n")}`);
   }
   return [t.header, ...sections].join("\n\n");
 }
@@ -270,6 +304,7 @@ export class Memories {
           template?: PromptTemplate;
           viewerUserId?: string;
           requestedGroupIds?: string[];
+          sourceLabels?: Record<string, string>;
         },
       ) => string;
     } & RequestContext = {},
@@ -325,6 +360,10 @@ export class Memories {
     const scopes: RecallScopeStat[] = [];
     const bestById = new Map<string, Memory>();
     const lists: Memory[][] = [];
+    // Rows from a non-user, non-group pool (an app/agent KB) carry a source label
+    // so the prompt sections them on their own instead of as the user's memories.
+    const userRowIds = new Set<string>();
+    const sourceLabels: Record<string, string> = {};
     for (const { pool, env } of envelopes) {
       let rows = env.data ?? [];
       // A USER pool returns the caller's rows across ALL their groups. When the
@@ -340,12 +379,21 @@ export class Memories {
           return gids.length === 0 || gids.some((g) => requestedSet.has(g));
         });
       }
+      // An app/agent-only pool is a "source" — label its rows for sectioning.
+      const sourceLabel =
+        !pool.user_id && !poolHasGroups ? (pool.app_id ?? pool.agent_id) : undefined;
       scopes.push({ scope: poolLabel(pool), count: rows.length });
       for (const m of rows) {
+        if (pool.user_id) userRowIds.add(m.id);
+        else if (sourceLabel && !(m.id in sourceLabels)) sourceLabels[m.id] = sourceLabel;
         const ex = bestById.get(m.id);
         if (!ex || (m.score ?? -Infinity) > (ex.score ?? -Infinity)) bestById.set(m.id, m);
       }
       lists.push([...rows].sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity)));
+    }
+    // A row that also came from a user pool is the user's own — not a source row.
+    for (const id of Object.keys(sourceLabels)) {
+      if (userRowIds.has(id)) delete sourceLabels[id];
     }
 
     // Order scopes by their top score, THEN round-robin across them. The
@@ -383,6 +431,7 @@ export class Memories {
         template: options.template,
         viewerUserId,
         requestedGroupIds,
+        sourceLabels,
       }),
       scopes,
     };

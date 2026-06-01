@@ -354,6 +354,12 @@ describe("Memories.recall — pools (general union)", () => {
     // both pools' rows unioned; no group pool → no group sections
     expect(res.memories.map((m) => m.id).sort()).toEqual(["K", "P"]);
     expect(res.scopes.map((s) => s.scope).sort()).toEqual(["personal", "scope"]);
+    // the app KB row is sectioned under its source label — NOT mixed into the
+    // user's personal facts, so a doc isn't framed as something the user said.
+    expect(res.prompt).toContain("Personal:");
+    expect(res.prompt).toContain("product-kb:");
+    expect(res.prompt.indexOf("reset your key")).toBeGreaterThan(res.prompt.indexOf("product-kb:"));
+    expect(res.prompt.indexOf("dark mode")).toBeLessThan(res.prompt.indexOf("product-kb:"));
   });
 
   it("throws when no pool carries a scope axis", async () => {
@@ -402,6 +408,9 @@ describe("Memories.recall — pools (general union)", () => {
     // carries grp_docs (not the requested grp_trip).
     expect(ids).toContain("K");
     expect(ids).toContain("T");
+    // K renders under its own source section ("kb:"), T under its group ("Trip:")
+    expect(res.prompt).toContain("Trip:");
+    expect(res.prompt).toContain("kb:");
   });
 
   it("attributes a second user pool's rows (not presented as the viewer's)", async () => {
