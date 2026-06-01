@@ -413,6 +413,32 @@ describe("Memories.recall — pools (general union)", () => {
     expect(res.prompt).toContain("kb:");
   });
 
+  it("doesn't bleed-filter a deliberately-scoped user pool (user_id + app_id)", async () => {
+    const { http } = fakeHttp({
+      onSearch: (body) =>
+        body.group_ids
+          ? [mem("T", "trip fact", 0.6, { group_ids: ["grp_trip"] })]
+          : [
+              mem("D", "alice docs note", 0.9, {
+                user_id: "alice",
+                app_id: "docs",
+                group_ids: ["grp_other"],
+              }),
+            ],
+      groups: [grp("grp_trip", "Trip")],
+    });
+    const res = await new Memories(http).recall({
+      query: "q",
+      pools: [{ user_id: "alice", app_id: "docs" }, { group_ids: ["grp_trip"] }],
+    });
+    const ids = res.memories.map((m) => m.id);
+    // The {user_id, app_id} pool is a deliberate scope — its rows are returned as
+    // the axes select, even tagged to a non-requested group. Only a PLAIN
+    // {user_id} pool is bleed-filtered (see the group-recall test above).
+    expect(ids).toContain("D");
+    expect(ids).toContain("T");
+  });
+
   it("attributes a second user pool's rows (not presented as the viewer's)", async () => {
     const { http } = fakeHttp({
       onSearch: (body) =>

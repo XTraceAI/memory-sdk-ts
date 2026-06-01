@@ -366,14 +366,18 @@ export class Memories {
     const sourceLabels: Record<string, string> = {};
     for (const { pool, env } of envelopes) {
       let rows = env.data ?? [];
-      // A USER pool returns the caller's rows across ALL their groups. When the
-      // recall targets groups, drop that pool's rows tagged solely to OTHER
-      // (non-requested) groups so the user's other trips don't bleed in. Only a
-      // user pool is filtered — an app/agent pool was scoped deliberately, so
-      // keep its rows whatever group tags they carry. (No groups requested →
-      // nothing filtered.)
+      // A PLAIN personal pool ({ user_id } with no other axis) returns the
+      // caller's rows across ALL their groups. When the recall targets groups,
+      // drop that pool's rows tagged solely to OTHER (non-requested) groups so
+      // the user's other trips don't bleed in. Only the plain personal pool gets
+      // this convenience: any extra axis (app_id/agent_id) — or a group pool — is
+      // a deliberate scope, so its rows are returned exactly as the axes select
+      // (AND-within-pool), even when tagged to a non-requested group. (No groups
+      // requested → nothing filtered.)
       const poolHasGroups = !!(pool.group_ids && pool.group_ids.length > 0);
-      if (requestedSet && pool.user_id && !poolHasGroups) {
+      const isPlainUserPool =
+        !!pool.user_id && !poolHasGroups && !pool.app_id && !pool.agent_id;
+      if (requestedSet && isPlainUserPool) {
         rows = rows.filter((m) => {
           const gids = m.group_ids ?? [];
           return gids.length === 0 || gids.some((g) => requestedSet.has(g));
