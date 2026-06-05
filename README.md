@@ -8,11 +8,11 @@
   <a href="https://www.npmjs.com/package/@xtraceai/memory"><img src="https://img.shields.io/npm/v/@xtraceai/memory?color=blue&label=npm&cacheSeconds=0" alt="npm"></a>
   <a href="https://github.com/XTraceAI/memory-sdk-ts/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-ffffff?labelColor=d4eaf7&color=2e6cc4" alt="License"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-18+-339933?logo=node.js&logoColor=white" alt="Node 18+"></a>
-  <a href="https://docs.mem.xtrace.ai"><img src="https://img.shields.io/badge/Docs-docs.mem.xtrace.ai-blue" alt="Docs"></a>
+  <a href="https://docs.xtrace.ai"><img src="https://img.shields.io/badge/Docs-docs.xtrace.ai-blue" alt="Docs"></a>
 </p>
 
 <h4>
-  <a href="https://docs.mem.xtrace.ai">Documentation</a> |
+  <a href="https://docs.xtrace.ai">Documentation</a> |
   <a href="https://x.com/XTrace_ai">X</a> |
   <a href="https://www.linkedin.com/company/xtrace-ai/">LinkedIn</a>
 </h4>
@@ -52,7 +52,7 @@ Sign in at [app.xtrace.ai](https://app.xtrace.ai) and grab two values from **Set
 - **API key** — `xtk_…`
 - **Org id** — your organization identifier
 
-Both are required on every request. See the [full docs](https://docs.mem.xtrace.ai/guides/authentication) for storage best practices.
+Both are required on every request. See the [full docs](https://docs.xtrace.ai/guides/authentication) for storage best practices.
 
 ## TypeScript SDK
 
@@ -179,7 +179,7 @@ try {
 
 ## Documentation
 
-Full documentation at [docs.mem.xtrace.ai](https://docs.mem.xtrace.ai).
+Full documentation at [docs.xtrace.ai](https://docs.xtrace.ai).
 
 # License
 
