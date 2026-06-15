@@ -1,5 +1,8 @@
-// Hand-written types matching openapi/memory_v2.json.
-// Regenerate the canonical version with `npm run gen:types` once the spec is final.
+// Hand-authored domain types — the canonical public surface (ADR-002).
+// The spec-derived reference lives at src/generated/types.ts; regenerate it
+// with `npm run gen:types` (source: spec/memory.json) and keep it in sync via
+// `npm run check:types-sync`. The generated file is a reference, not the
+// public surface — these hand-authored types are.
 
 export type MemoryType = "fact" | "artifact" | "episode";
 
@@ -71,6 +74,14 @@ interface MemoryBase<T extends MemoryType, D> {
   created_at: string;
   updated_at: string;
   details: D;
+  /**
+   * **Deferred for 1.0** — typed but inert. No request-side `expand` parameter
+   * exists on search/list/recall yet, so the server has no trigger to populate
+   * this and it stays `undefined` in practice. The field is kept as a
+   * forward-looking contract; it will be wired when the API documents an
+   * `expand` request shape. See ADR-002 (C2: `Memory.expanded` / `expand` →
+   * defer, no documented request trigger).
+   */
   expanded?: Record<string, Memory[]>;
 }
 
@@ -199,9 +210,17 @@ export interface SearchRequest {
   cursor?: string | null;
   include?: Array<"context_prompt" | "full_content">;
   /**
-   * @deprecated Legacy pre-#68 wire shape. The server still lifts
-   * `user_id` / `agent_id` / `app_id` out of here, but new code should use
-   * the top-level fields above.
+   * Filter DSL over indexed payload keys — operators (`$eq`/`$in`/`$gt`/…),
+   * `null` for "unset", and `AND`/`OR`/`NOT` composition; top-level keys are
+   * implicit-AND'd. Build it with the typed `f` builder (`src/filter.ts`) or
+   * pass a raw {@link Filter} object. This operator-DSL use is **supported and
+   * not deprecated**.
+   *
+   * @deprecated *only* for lifting the scope axes
+   * (`user_id` / `agent_id` / `app_id`) out of here — that legacy pre-#68 form
+   * still works (the server lifts them) but new code should set those as the
+   * top-level fields above. Filtering on non-scope payload keys via the
+   * operator DSL is the supported, non-deprecated use of this field.
    */
   filters?: Filter;
 }
@@ -249,6 +268,22 @@ export interface RecallParams {
   mode?: SearchMode;
   /** Cap on the merged, deduped result. Default 10. */
   limit?: number;
+  /**
+   * Heavy fields to fetch on the returned rows. Forwarded to **every** per-pool
+   * search, so a single recall enriches the merged set without follow-up `get()`
+   * calls — e.g. `include: ["full_content"]` makes `ArtifactDetails.full_content`
+   * available on artifact rows.
+   *
+   * Scoped to `"full_content"` only (NOT the `"context_prompt"` that
+   * {@link SearchRequest} accepts): recall discards each pool's
+   * {@link SearchListEnvelope} — it dedupes/re-ranks the rows and renders **one**
+   * client-side prompt, returning `{ memories, prompt, scopes }` with no per-pool
+   * `extras` channel — so a requested `context_prompt` would only make the server
+   * assemble prompts recall then throws away. Use {@link Memories.search} /
+   * {@link Memories.retrieve} (which return the envelope intact) when you need the
+   * per-scope `context_prompt`.
+   */
+  include?: Array<"full_content">;
 }
 
 /** Per-pool diagnostic returned by {@link Memories.recall}. */
@@ -279,6 +314,15 @@ export interface RecallResult {
  * Note: a template controls *formatting of the fields each row carries*. It can't
  * reproduce xmem features that need extra data (authorship sections, full
  * artifact bodies, char-budgeting) without also widening the search payload.
+ *
+ * **Server-supplied templates are deferred for 1.0.** The type is fully usable
+ * today as a client-side override (`recall(..., { template })`), but the
+ * "future API endpoint returns xmem's preferred template" path above is
+ * **not yet implemented** — no server endpoint returns a `PromptTemplate`, so
+ * the SDK ships the {@link DEFAULT_PROMPT_TEMPLATE} and does not fetch one. The
+ * type stays as a forward contract; the fetch/cache path is wired when the
+ * server exposes it. See ADR-002 (C2: server-supplied `PromptTemplate` → defer,
+ * no server endpoint; client default suffices).
  */
 export interface PromptTemplate {
   /** Leading line of the block. */
@@ -329,6 +373,25 @@ export interface GroupUpdateRequest {
   name?: string;
   prompt?: string;
   status?: GroupStatus;
+}
+
+/**
+ * Body for `memories.patch(id, …)` — the **only** in-place mutate operation on a
+ * memory. The live `PATCH /v1/memories/{id}` contract is group-membership
+ * editing (verified against the deployed API; see gitban card 2syddu): you add
+ * and/or remove a memory's group tags and get the full updated {@link Memory}
+ * back. The old `{ text, metadata }` "UpdateRequest" the spec once documented is
+ * **gone** — content corrections flow through ingest/supersede, not PATCH.
+ *
+ * At least one of the two arrays must carry an entry; an empty patch is rejected
+ * client-side (and would be a `422 empty_patch` server-side). An empty array is
+ * treated the same as an absent field and is not sent on the wire.
+ */
+export interface MemoryPatchRequest {
+  /** Group ids to add to the memory's membership. */
+  add_group_ids?: string[];
+  /** Group ids to remove from the memory's membership. */
+  remove_group_ids?: string[];
 }
 
 export interface GroupListEnvelope {

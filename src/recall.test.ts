@@ -507,3 +507,94 @@ describe("Memories.recall — pools (general union)", () => {
     expect(res.prompt).not.toContain("you:"); // no group sections here
   });
 });
+
+describe("Memories.recall — include[] threading (B2 / KD-5)", () => {
+  it("forwards include:['full_content'] to EVERY per-pool search body", async () => {
+    const { http, calls } = fakeHttp({ onSearch: () => [] });
+    await new Memories(http).recall({
+      query: "q",
+      pools: [{ user_id: "alice" }, { group_ids: ["grp_x"] }, { app_id: "kb" }],
+      include: ["full_content"],
+    });
+    // capstone: every pool's search body must carry the include verbatim
+    expect(calls).toHaveLength(3);
+    expect(calls.every((c) => Array.isArray(c.include) && c.include[0] === "full_content")).toBe(
+      true,
+    );
+    for (const c of calls) expect(c.include).toEqual(["full_content"]);
+  });
+
+  it("omitting include leaves no `include` key on any pool body (unchanged behaviour)", async () => {
+    const { http, calls } = fakeHttp({ onSearch: () => [] });
+    await new Memories(http).recall({
+      query: "q",
+      pools: [{ user_id: "alice" }, { group_ids: ["grp_x"] }],
+    });
+    expect(calls).toHaveLength(2);
+    // body must not even carry the key — not `include: undefined`
+    for (const c of calls) {
+      expect("include" in c).toBe(false);
+      expect(c.include).toBeUndefined();
+    }
+  });
+
+  it("the per-pool scope axes still win over any stray include collision", async () => {
+    // include rides alongside the spread scope; `...pool` carries no include, so
+    // the pool axes and the include coexist on each body without clobbering.
+    const { http, calls } = fakeHttp({ onSearch: () => [] });
+    await new Memories(http).recall({
+      query: "q",
+      pools: [{ user_id: "alice", agent_id: "bot" }],
+      include: ["full_content"],
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.user_id).toBe("alice");
+    expect(calls[0]!.agent_id).toBe("bot");
+    expect(calls[0]!.include).toEqual(["full_content"]);
+  });
+
+  it("rejects context_prompt on RecallParams.include at compile time (KD-5)", async () => {
+    const { http, calls } = fakeHttp({ onSearch: () => [] });
+    await new Memories(http).recall({
+      query: "q",
+      pools: [{ user_id: "alice" }],
+      // @ts-expect-error — recall scopes include to "full_content" only; recall
+      // discards per-pool envelopes, so context_prompt has no output channel.
+      include: ["context_prompt"],
+    });
+    // it still runs (the value is forwarded verbatim) — the contract is the
+    // compile-time rejection above, enforced by @ts-expect-error under typecheck.
+    expect(calls).toHaveLength(1);
+  });
+
+  it("full_content is reachable on a returned artifact row (typed accessor)", async () => {
+    const { http } = fakeHttp({
+      onSearch: () => [
+        mem("ART", "5-day plan body", 0.9, {
+          type: "artifact",
+          details: {
+            title: "Itinerary",
+            rationale: null,
+            version: null,
+            root_id: null,
+            source_fact_ids: [],
+            episode_ids: [],
+            full_content: "the entire artifact body text",
+          },
+        }),
+      ],
+    });
+    const res = await new Memories(http).recall({
+      query: "q",
+      pools: [{ user_id: "alice" }],
+      include: ["full_content"],
+    });
+    const row = res.memories.find((m) => m.id === "ART")!;
+    // compile-time + runtime: full_content lives on the artifact's details
+    if (row.type === "artifact") {
+      expect(row.details.full_content).toBe("the entire artifact body text");
+    } else {
+      throw new Error("expected an artifact row");
+    }
+  });
+});
