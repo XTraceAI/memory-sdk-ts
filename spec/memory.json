@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "VecDB Memory API",
-    "description": "Unified memory API at `/v1/memories/*`. Mode-free reads (list, search,\nget-by-id), async-by-default ingest (`POST /v1/memories` \u2192 202 + job_id,\nor `?wait=true` for inline 200 within 30s), and polling at\n`GET /v1/memories/jobs/{job_id}`.\n\n## Authentication\n\nSend **both**:\n\n- `Authorization: Token <api-key>` *or* `x-api-key: <api-key>`\n- `X-Org-Id: <org-id>`\n\nTenancy is keyed by `(org_id, key_hash)`. Every row is scoped to the\ncalling org; cross-org reads are not possible even with a guessed id.\n\n## Ingest contract (`POST /v1/memories`)\n\n```\n{\n  \"messages\":          [...],     // REQUIRED \u2014 chat-style turns\n  \"user_id\":           \"alice\",   // REQUIRED \u2014 per-user scope\n  \"conv_id\":           \"conv-1\",  // REQUIRED \u2014 conversation anchor\n  \"agent_id\":          \"...\",     // optional\n  \"app_id\":            \"...\",     // optional\n  \"metadata\":          {...},     // optional, free-form customer keys\n  \"extract_artifacts\": false      // opt-in to artifact-extraction stage\n}\n```\n\n- **Required entities:** `user_id` and `conv_id`. `user_id` keys the\n  per-user namespace (facts accumulate across that user's\n  conversations); `conv_id` anchors each extracted memory to a session\n  for replay, export, and bulk retract.\n- Facts are always extracted from messages. Episodes are always\n  extracted (`conv_id` is guaranteed). Artifacts are extracted only\n  when `extract_artifacts: true` is set.\n- The server picks live vs batch extraction by message count; no\n  client-facing pipeline hint exists.\n- Returns `202 Accepted` + `IngestJobResponse` with `status: \"pending\"`\n  by default. With `?wait=true`, the server holds the connection up to\n  ~30s and returns `200 OK` + terminal `IngestJobResponse` if\n  extraction completes within the window; otherwise falls back to 202.\n\n## Memory object\n\n```\n{\n  \"id\":         \"<uuid>\",\n  \"object\":    \"memory\",\n  \"type\":      \"fact\" | \"artifact\" | \"episode\",\n  \"text\":      \"short readable preview\",\n  \"user_id\":   \"...\", \"agent_id\": \"...\", \"conv_id\": \"...\", \"app_id\": \"...\",\n  \"metadata\":   {...},\n  \"categories\": [...],\n  \"score\":      0.83,         // present on search responses only\n  \"created_at\": \"2026-05-15T18:42:11Z\",\n  \"updated_at\": \"2026-05-15T18:42:11Z\",\n  \"details\":    {...}         // type-specific; see FactDetails /\n                              //  ArtifactDetails / EpisodeDetails schemas\n}\n```\n\n`type` is the discriminator. `details` carries the per-type extension\nfields; the three variants are in the components section.\n\n## Pagination\n\nCursor-based on list and search. Cursors are opaque, tenant-scoped\nstrings. `has_more` plus `next_cursor` drive the next page. Default\nordering is `created_at_desc`; pass `order=created_at_asc` for the\nreverse. `limit` is 1\u2013100 (default 50 on list, 20 on search).\n\n## Filter DSL\n\n`GET /v1/memories` accepts flat equality on the four entity fields\n(`user_id`, `agent_id`, `conv_id`, `app_id`) plus `type`.\n\n`POST /v1/memories/search` accepts the full DSL in the `filters`\nobject:\n\n| Operator   | Meaning                                          |\n| ---------- | ------------------------------------------------ |\n| bare value | exact match (e.g. `{\"user_id\": \"alice\"}`)         |\n| `null`     | field is unset (absent or null)                   |\n| `$eq`      | explicit equality (same as bare value)            |\n| `$ne`      | not equal AND field is set (SQL semantics)        |\n| `$in`      | one-of (`{\"agent_id\": {\"$in\": [\"bot-a\",\"bot-b\"]}}`) |\n| `$nin`     | none-of (MongoDB semantics \u2014 null/absent passes)  |\n| `$exists`  | `true` = field set, `false` = field unset         |\n| `$gt` / `$gte` / `$lt` / `$lte` | range comparators                  |\n| `$between` | `[lo, hi]` inclusive range                        |\n| `AND`      | `{\"AND\": [<clause>, <clause>, ...]}` \u2014 intersection |\n| `OR`       | `{\"OR\":  [<clause>, ...]}` \u2014 union                  |\n| `NOT`      | `{\"NOT\": <clause>}` \u2014 negation                      |\n\nTop-level keys are implicit-AND'd. Unknown operators are silently\nignored. Filters apply to any indexed payload field, including\ncustomer metadata keys (those land as their own indexed payload keys).\n\n## Error envelope\n\nAll non-2xx responses use a single body shape:\n\n```\n{\n  \"detail\": {\n    \"code\":    \"<stable error code>\",\n    \"message\": \"<human-readable summary>\"\n  }\n}\n```\n\nSwitch on `detail.code` rather than parsing the message. Each endpoint\ndeclares the codes it can return.\n\nPydantic field-validation failures (422) use the FastAPI default\nshape \u2014 `detail` is an array of `{loc, msg, type}` entries listing\neach invalid field.\n\n## Response headers\n\n- `X-Request-Id` \u2014 echo of the inbound request id, or a server-\n  generated UUID. Use this when filing support requests; operator\n  logs are keyed on it.\n- `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` \u2014\n  current bucket state for this `(org_id, key_hash)` pair.\n- `Retry-After` \u2014 present on 429 responses, seconds until the next\n  permitted request.\n",
+    "description": "Unified memory API at `/v1/memories/*`. Mode-free reads (list, search,\nget-by-id), async-by-default ingest (`POST /v1/memories` \u2192 202 + job_id,\nor `?wait=true` for inline 200 within 30s), and polling at\n`GET /v1/memories/jobs/{job_id}`.\n\n## Authentication\n\nSend **both**:\n\n- `Authorization: Bearer <api-key>` *or* `Authorization: Token <api-key>` *or* `x-api-key: <api-key>`\n- `X-Org-Id: <org-id>`\n\nThe `@xtraceai/memory` SDK sends `Authorization: Bearer <api-key>` (its\nshipping default through v0.2.1; accepted by the live API). The `Token`\nand `x-api-key` forms remain valid alternatives. The `Bearer` form was\nadded to this spec additively per ADR-001 (A2a); nothing was removed.\n\nTenancy is keyed by `(org_id, key_hash)`. Every row is scoped to the\ncalling org; cross-org reads are not possible even with a guessed id.\n\n## Ingest contract (`POST /v1/memories`)\n\n```\n{\n  \"messages\":          [...],     // REQUIRED \u2014 chat-style turns\n  \"user_id\":           \"alice\",   // REQUIRED \u2014 per-user scope\n  \"conv_id\":           \"conv-1\",  // REQUIRED \u2014 conversation anchor\n  \"agent_id\":          \"...\",     // optional\n  \"app_id\":            \"...\",     // optional\n  \"metadata\":          {...},     // DROPPED server-side (see note below)\n  \"extract_artifacts\": false      // opt-in to artifact-extraction stage\n}\n```\n\n> **`metadata` dropped server-side (ADR-001 A5, commit `a7da7a9`).** The\n> deployed API no longer accepts a `metadata` field on ingest, and the\n> `@xtraceai/memory` SDK dropped it from `IngestRequest`. The key is shown\n> above for diff legibility only; sending it has no effect. This annotation\n> is additive — the field reference is retained, not deleted.\n\n- **Required entities:** `user_id` and `conv_id`. `user_id` keys the\n  per-user namespace (facts accumulate across that user's\n  conversations); `conv_id` anchors each extracted memory to a session\n  for replay, export, and bulk retract.\n- Facts are always extracted from messages. Episodes are always\n  extracted (`conv_id` is guaranteed). Artifacts are extracted only\n  when `extract_artifacts: true` is set.\n- The server picks live vs batch extraction by message count; no\n  client-facing pipeline hint exists.\n- Returns `202 Accepted` + `IngestJobResponse` with `status: \"pending\"`\n  by default. With `?wait=true`, the server holds the connection up to\n  ~30s and returns `200 OK` + terminal `IngestJobResponse` if\n  extraction completes within the window; otherwise falls back to 202.\n\n## Memory object\n\n```\n{\n  \"id\":         \"<uuid>\",\n  \"object\":    \"memory\",\n  \"type\":      \"fact\" | \"artifact\" | \"episode\",\n  \"text\":      \"short readable preview\",\n  \"user_id\":   \"...\", \"agent_id\": \"...\", \"conv_id\": \"...\", \"app_id\": \"...\",\n  \"metadata\":   {...},        // DROPPED server-side (see note below)\n  \"categories\": [...],\n  \"score\":      0.83,         // present on search responses only\n  \"created_at\": \"2026-05-15T18:42:11Z\",\n  \"updated_at\": \"2026-05-15T18:42:11Z\",\n  \"details\":    {...}         // type-specific; see FactDetails /\n                              //  ArtifactDetails / EpisodeDetails schemas\n}\n```\n\n> **`metadata` dropped server-side (ADR-001 A5, commit `a7da7a9`).** The\n> deployed API no longer returns a `metadata` field on the Memory object,\n> and the `@xtraceai/memory` SDK dropped it from its `Memory` type. The key\n> is shown above for diff legibility only. This annotation is additive — the\n> field reference is retained, not deleted.\n\n`type` is the discriminator. `details` carries the per-type extension\nfields; the three variants are in the components section.\n\n## Pagination\n\nCursor-based on list and search. Cursors are opaque, tenant-scoped\nstrings. `has_more` plus `next_cursor` drive the next page. Default\nordering is `created_at_desc`; pass `order=created_at_asc` for the\nreverse. `limit` is 1\u2013100 (default 50 on list, 20 on search).\n\n## Filter DSL\n\n`GET /v1/memories` accepts flat equality on the four entity fields\n(`user_id`, `agent_id`, `conv_id`, `app_id`) plus `type`.\n\n`POST /v1/memories/search` accepts the full DSL in the `filters`\nobject:\n\n| Operator   | Meaning                                          |\n| ---------- | ------------------------------------------------ |\n| bare value | exact match (e.g. `{\"user_id\": \"alice\"}`)         |\n| `null`     | field is unset (absent or null)                   |\n| `$eq`      | explicit equality (same as bare value)            |\n| `$ne`      | not equal AND field is set (SQL semantics)        |\n| `$in`      | one-of (`{\"agent_id\": {\"$in\": [\"bot-a\",\"bot-b\"]}}`) |\n| `$nin`     | none-of (MongoDB semantics \u2014 null/absent passes)  |\n| `$exists`  | `true` = field set, `false` = field unset         |\n| `$gt` / `$gte` / `$lt` / `$lte` | range comparators                  |\n| `$between` | `[lo, hi]` inclusive range                        |\n| `AND`      | `{\"AND\": [<clause>, <clause>, ...]}` \u2014 intersection |\n| `OR`       | `{\"OR\":  [<clause>, ...]}` \u2014 union                  |\n| `NOT`      | `{\"NOT\": <clause>}` \u2014 negation                      |\n\nTop-level keys are implicit-AND'd. Unknown operators are silently\nignored. Filters apply to any indexed payload field, including\ncustomer metadata keys (those land as their own indexed payload keys).\n\n> **Note (ADR-001 A5, commit `a7da7a9`):** `metadata` was dropped\n> server-side and removed from the SDK, so filtering on *customer metadata\n> keys* no longer has a `metadata` field to target. The entity fields\n> (`user_id`, `agent_id`, `conv_id`, `app_id`), `type`, and other indexed\n> payload keys are unaffected. Whether/how metadata-key filtering returns is\n> owned by the typed-filter-DSL (B1) design doc. This annotation is\n> additive — the operator table above is unchanged.\n\n## Error envelope\n\nAll non-2xx responses use a single body shape (verified against the\nlive deployment, gitban card 2syddu / ADR-003 A1):\n\n```\n{\n  \"error\": {\n    \"type\":       \"<error class, e.g. invalid_request_error>\",\n    \"code\":       \"<stable error code>\",\n    \"message\":    \"<human-readable summary>\",\n    \"request_id\": \"<server-generated id, echoed in X-Request-Id>\",\n    \"details\":    {...}   // optional; present on 422 (see below)\n  }\n}\n```\n\nSwitch on `error.code` rather than parsing the message. Each endpoint\ndeclares the codes it can return.\n\nField-validation failures (422) carry the per-field errors under\n`error.details.errors`, an array of `{field, message, type}` entries\n(e.g. `{\"field\": \"query\", \"message\": \"Field required\", \"type\": \"missing\"}`)\n\u2014 **not** the FastAPI-default `detail: [{loc, msg, type}]` shape. The\n`@xtraceai/memory` SDK lifts `error.details` onto `MemoryError.details`.\n\n## Response headers\n\n- `X-Request-Id` \u2014 echo of the inbound request id, or a server-\n  generated UUID. Use this when filing support requests; operator\n  logs are keyed on it.\n- `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset` \u2014\n  current bucket state for this `(org_id, key_hash)` pair (verified live,\n  gitban card 2syddu / ADR-003 A3). `x-ratelimit-reset` is an **absolute\n  epoch-seconds timestamp** (e.g. `1781491860`), not a delta; derive the\n  seconds-remaining as `reset - now_epoch_seconds`. The bucket is shared\n  across auth schemes (keyed on `(org_id, key_hash)`). The un-prefixed\n  RFC-draft `RateLimit-*` names are not emitted by the live deployment;\n  the SDK reads them only as a defensive fallback.\n- `Retry-After` \u2014 present on 429 responses, seconds until the next\n  permitted request.\n",
     "version": "1.0.0"
   },
   "paths": {
@@ -60,7 +60,7 @@
             }
           },
           "400": {
-            "description": "`detail.code = \"invalid_messages\"` \u2014 empty `messages` array.",
+            "description": "`error.code = \"invalid_messages\"` \u2014 empty `messages` array.",
             "content": {
               "application/json": {
                 "schema": {
@@ -80,7 +80,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -90,7 +90,7 @@
             }
           },
           "429": {
-            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry.",
+            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -100,7 +100,7 @@
             }
           },
           "500": {
-            "description": "Server-side failure. Body carries `detail.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
+            "description": "Server-side failure. Body carries `error.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
             "content": {
               "application/json": {
                 "schema": {
@@ -110,7 +110,7 @@
             }
           },
           "403": {
-            "description": "Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE \u2014 those are reserved for API-key callers. Body carries `detail.code = \"forbidden\"`.",
+            "description": "Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE \u2014 those are reserved for API-key callers. Body carries `error.code = \"forbidden\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -313,7 +313,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -323,7 +323,7 @@
             }
           },
           "429": {
-            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry.",
+            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -333,7 +333,7 @@
             }
           },
           "500": {
-            "description": "Server-side failure. Body carries `detail.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
+            "description": "Server-side failure. Body carries `error.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
             "content": {
               "application/json": {
                 "schema": {
@@ -376,7 +376,7 @@
             }
           },
           "404": {
-            "description": "`detail.code = \"job_not_found\"` \u2014 unknown job id or tenant mismatch.",
+            "description": "`error.code = \"job_not_found\"` \u2014 unknown job id or tenant mismatch.",
             "content": {
               "application/json": {
                 "schema": {
@@ -396,7 +396,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -406,7 +406,7 @@
             }
           },
           "429": {
-            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry.",
+            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -416,7 +416,7 @@
             }
           },
           "500": {
-            "description": "Server-side failure. Body carries `detail.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
+            "description": "Server-side failure. Body carries `error.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
             "content": {
               "application/json": {
                 "schema": {
@@ -459,7 +459,7 @@
             }
           },
           "400": {
-            "description": "`detail.code = \"missing_user_id\"` or `\"missing_conv_id\"` \u2014 `include=context_prompt` was requested but the corresponding entity is absent from `filters` (the retrieval-agent pipeline needs both to construct the right cache namespace).",
+            "description": "`error.code = \"missing_user_id\"` or `\"missing_conv_id\"` \u2014 `include=context_prompt` was requested but the corresponding entity is absent from `filters` (the retrieval-agent pipeline needs both to construct the right cache namespace).",
             "content": {
               "application/json": {
                 "schema": {
@@ -479,7 +479,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -489,7 +489,7 @@
             }
           },
           "429": {
-            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry.",
+            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -499,7 +499,7 @@
             }
           },
           "500": {
-            "description": "Server-side failure. Body carries `detail.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
+            "description": "Server-side failure. Body carries `error.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
             "content": {
               "application/json": {
                 "schema": {
@@ -542,7 +542,7 @@
             }
           },
           "404": {
-            "description": "`detail.code = \"memory_not_found\"` \u2014 no row with that id under this org.",
+            "description": "`error.code = \"memory_not_found\"` \u2014 no row with that id under this org.",
             "content": {
               "application/json": {
                 "schema": {
@@ -562,7 +562,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -572,7 +572,7 @@
             }
           },
           "429": {
-            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry.",
+            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -582,7 +582,7 @@
             }
           },
           "500": {
-            "description": "Server-side failure. Body carries `detail.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
+            "description": "Server-side failure. Body carries `error.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
             "content": {
               "application/json": {
                 "schema": {
@@ -597,8 +597,8 @@
         "tags": [
           "memories"
         ],
-        "summary": "Update a memory's text and/or metadata",
-        "description": "Update text and/or metadata.\n\n- ``text`` change \u2192 supersede (create a new ACTIVE fact pointing\n  back at the old one via ``supersedes``); fact-only operation.\n- ``metadata`` change \u2192 merge onto the existing payload in place\n  (works for any type).\n- Both \u2192 text supersede; the new revision carries the merged\n  metadata. The old revision keeps its original metadata.\n\nTrying to set an entity id / ``type`` / ``created_at`` via\n``metadata`` surfaces ``422 immutable_field``.",
+        "summary": "Edit a memory's group memberships",
+        "description": "Add and/or remove group memberships on an existing memory. **Live\nendpoint** \u2014 verified against the deployed API (gitban card 2syddu /\nADR-003 A4).\n\nThe earlier `[REMOVED \u2014 returns 405]` annotation was **wrong**: the\nlive probe confirmed `PATCH /v1/memories/{memory_id}` exists and its\ncurrent contract is group-membership editing, not the old\n`{text, metadata}` `UpdateRequest`. (That old content-edit contract is\ngenuinely gone; corrections to a memory's *content* still flow through\ningest / supersede via `POST /v1/memories`.)\n\nContract:\n\n- Request body is `{add_group_ids?, remove_group_ids?}`; at least one\n  must carry an entry. An empty body (or both arrays empty) returns\n  `422` with `error.code = \"empty_patch\"`.\n- On success returns `200 OK` + the full updated `Memory` (identical\n  shape to `GET /v1/memories/{memory_id}`), with `group_ids`\n  reflecting the edit.\n- API-key callers only; a service-token (first-party portal) caller\n  gets `403 forbidden` (same as ingest / DELETE).\n\nThe `@xtraceai/memory` SDK exposes this as\n`memories.patch(id, {add_group_ids?, remove_group_ids?}): Promise<Memory>`,\nwhich also guards the empty-patch case client-side.",
         "operationId": "patch_memory_v1_memories__memory_id__patch",
         "parameters": [
           {
@@ -616,14 +616,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpdateRequest"
+                "$ref": "#/components/schemas/MemoryPatchRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "Successful Response \u2014 the full updated `Memory`, `group_ids` reflecting the edit.",
             "content": {
               "application/json": {
                 "schema": {
@@ -632,18 +632,8 @@
               }
             }
           },
-          "400": {
-            "description": "`detail.code = \"invalid_request\"` \u2014 empty PATCH body (neither `text` nor `metadata`).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "404": {
-            "description": "`detail.code = \"memory_not_found\"`.",
+            "description": "`error.code = \"memory_not_found\"` \u2014 no row with that id under this org.",
             "content": {
               "application/json": {
                 "schema": {
@@ -653,7 +643,7 @@
             }
           },
           "422": {
-            "description": "Validation error. Possible codes: `immutable_field` (entity ids / `type` / `created_at` in `metadata`), `reserved_field` (internal storage key in `metadata`), `empty_text_field` (empty / whitespace-only `text`), or `invalid_request` (`text` patch on a non-fact row).",
+            "description": "`error.code = \"empty_patch\"` \u2014 the body carried neither `add_group_ids` nor `remove_group_ids` (or both were empty). Provide at least one group id to add or remove.",
             "content": {
               "application/json": {
                 "schema": {
@@ -663,7 +653,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -673,7 +663,7 @@
             }
           },
           "429": {
-            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry.",
+            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -683,7 +673,7 @@
             }
           },
           "500": {
-            "description": "Server-side failure. Body carries `detail.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
+            "description": "Server-side failure. Body carries `error.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
             "content": {
               "application/json": {
                 "schema": {
@@ -693,7 +683,7 @@
             }
           },
           "403": {
-            "description": "Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE \u2014 those are reserved for API-key callers. Body carries `detail.code = \"forbidden\"`.",
+            "description": "Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE \u2014 those are reserved for API-key callers. Body carries `error.code = \"forbidden\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -727,7 +717,7 @@
             "description": "Deleted. Subsequent DELETEs return 404 (idempotent contract)."
           },
           "404": {
-            "description": "`detail.code = \"memory_not_found\"` \u2014 unknown id, or a fact that was already soft-deleted (`tag2` is anything other than `active`).",
+            "description": "`error.code = \"memory_not_found\"` \u2014 unknown id, or a fact that was already soft-deleted (`tag2` is anything other than `active`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -737,7 +727,7 @@
             }
           },
           "500": {
-            "description": "`detail.code = \"delete_failed\"` \u2014 storage error on hard delete (artifacts / episodes).",
+            "description": "`error.code = \"delete_failed\"` \u2014 storage error on hard delete (artifacts / episodes).",
             "content": {
               "application/json": {
                 "schema": {
@@ -757,7 +747,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -767,7 +757,7 @@
             }
           },
           "429": {
-            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry.",
+            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry.",
             "content": {
               "application/json": {
                 "schema": {
@@ -777,7 +767,7 @@
             }
           },
           "403": {
-            "description": "Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE \u2014 those are reserved for API-key callers. Body carries `detail.code = \"forbidden\"`.",
+            "description": "Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE \u2014 those are reserved for API-key callers. Body carries `error.code = \"forbidden\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -792,12 +782,72 @@
   },
   "components": {
     "schemas": {
-      "ErrorDetail": {
+      "ErrorFieldError": {
         "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field",
+            "description": "Name of the request field that failed validation.",
+            "examples": [
+              "query"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Human-readable description of the validation failure.",
+            "examples": [
+              "Field required"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "title": "Type",
+            "description": "Stable validation-failure type identifier.",
+            "examples": [
+              "missing"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "message",
+          "type"
+        ],
+        "title": "ErrorFieldError",
+        "description": "One per-field validation error, as carried in `error.details.errors`\non a 422 response. The live deployment uses `{field, message, type}`\n(NOT the FastAPI-default `{loc, msg, type}`). Verified against the live\nAPI (gitban card 2syddu / ADR-003 A1)."
+      },
+      "ErrorDetails": {
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorFieldError"
+            },
+            "title": "Errors",
+            "description": "Per-field validation errors. Present on 422 responses."
+          }
+        },
+        "type": "object",
+        "additionalProperties": true,
+        "title": "ErrorDetails",
+        "description": "Optional structured detail attached to an error. On 422 responses\nit carries an `errors` array of per-field `{field, message, type}`\nentries. Other endpoints may attach additional keys."
+      },
+      "ErrorBody": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "title": "Type",
+            "description": "Error class \u2014 the broad category of failure.",
+            "examples": [
+              "invalid_request_error"
+            ]
+          },
           "code": {
             "type": "string",
             "title": "Code",
-            "description": "Stable error identifier. Switch on this rather than parsing the message. Common values: `invalid_request`, `invalid_messages`, `memory_not_found`, `job_not_found`, `immutable_field`, `reserved_field`, `empty_text_field`, `missing_user_id`, `missing_conv_id`, `unsupported_include_option`, `cursor_mismatch`, `unauthorized`, `forbidden`, `rate_limited`, `delete_failed`, `search_failed`, `ingest_failed`, `server_error`.",
+            "description": "Stable error identifier. Switch on this rather than parsing the message. Common values: `invalid_request`, `invalid_messages`, `empty_patch`, `memory_not_found`, `job_not_found`, `immutable_field`, `reserved_field`, `empty_text_field`, `missing_user_id`, `missing_conv_id`, `unsupported_include_option`, `cursor_mismatch`, `unauthorized`, `forbidden`, `rate_limited`, `delete_failed`, `search_failed`, `ingest_failed`, `server_error`.",
             "examples": [
               "memory_not_found"
             ]
@@ -809,28 +859,46 @@
             "examples": [
               "Memory 0fa1c0e6-... not found"
             ]
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id",
+            "description": "Server-generated request id, echoed in the `X-Request-Id` response header. Use it when filing support requests."
+          },
+          "details": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorDetails"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details",
+            "description": "Optional structured detail; on 422 carries `errors` (per-field validation errors)."
           }
         },
         "type": "object",
         "required": [
+          "type",
           "code",
           "message"
         ],
-        "title": "ErrorDetail",
-        "description": "Inner ``detail`` block on every non-2xx response raised by a\nmemory-API route handler. ``code`` is the stable identifier\nclients should switch on; ``message`` is a sanitized human-\nreadable summary."
+        "title": "ErrorBody",
+        "description": "Inner `error` object on every non-2xx response raised by a memory-API\nroute handler. `code` is the stable identifier clients should switch\non; `message` is a sanitized human-readable summary; `request_id`\nmirrors the `X-Request-Id` header; `details` is optional structured\ndata (per-field validation errors on 422). Verified against the live\nAPI (gitban card 2syddu / ADR-003 A1)."
       },
       "ErrorEnvelope": {
         "properties": {
-          "detail": {
-            "$ref": "#/components/schemas/ErrorDetail"
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
           }
         },
         "type": "object",
         "required": [
-          "detail"
+          "error"
         ],
         "title": "ErrorEnvelope",
-        "description": "Standard error body for non-2xx responses raised by the memory\nAPI. Pydantic field-validation failures (422) use the FastAPI-\ndefault ``HTTPValidationError`` shape instead, where ``detail`` is\nan array of per-field error entries \u2014 switch on the response\nstatus code to pick the right shape."
+        "description": "Standard error body for all non-2xx responses raised by the memory\nAPI: a single top-level `error` object. The previously-documented\n`{detail: {...}}` / FastAPI `detail: [{loc, msg, type}]` shapes are NOT\nproduced by the live deployment (gitban card 2syddu / ADR-003 A1); the\n`@xtraceai/memory` SDK still tolerates them defensively. Switch on\n`error.code`; per-field 422 errors live under `error.details.errors`."
       },
       "HTTPValidationError": {
         "properties": {
@@ -1441,6 +1509,43 @@
         "title": "SearchListEnvelope",
         "description": "Search response \u2014 list envelope + optional ``extras`` block."
       },
+      "MemoryPatchRequest": {
+        "properties": {
+          "add_group_ids": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Add Group Ids",
+            "description": "Group ids to add this memory to. Omit or send `[]` to add nothing."
+          },
+          "remove_group_ids": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remove Group Ids",
+            "description": "Group ids to remove this memory from. Omit or send `[]` to remove nothing."
+          }
+        },
+        "type": "object",
+        "title": "MemoryPatchRequest",
+        "description": "Body for `PATCH /v1/memories/{memory_id}` \u2014 the live group-membership\nedit contract (gitban card 2syddu / ADR-003 A4). At least one of\n`add_group_ids` / `remove_group_ids` must carry an entry; an empty\npatch returns `422 empty_patch`. This is the **only** mutate-in-place\noperation; the old `{text, metadata}` `UpdateRequest` is gone (content\ncorrections flow through ingest / supersede). The `@xtraceai/memory`\nSDK surfaces this as `MemoryPatchRequest`."
+      },
       "SearchRequest": {
         "properties": {
           "query": {
@@ -1518,38 +1623,6 @@
         ],
         "title": "SearchRequest",
         "description": "POST /v1/memories/search \u2014 vector + filter search over the\nunified memory pool. No ``mode`` flag; opt into composed output\nvia ``include``.\n\n``filters`` is the full DSL (bare values, ``$in``/``$ne``/``$gte``/\n``$lte``, ``AND``/``OR``/``NOT``). Empty/omitted filters mean\n\"all memories in this org\"."
-      },
-      "UpdateRequest": {
-        "properties": {
-          "text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Text",
-            "description": "New fact text. When provided, supersedes the existing fact: a new ACTIVE row is created pointing back at the old one via `supersedes`, the old row's `tag2` flips to superseded. Fact-only \u2014 sending `text` on an artifact or episode row returns 422. Empty / whitespace-only values return 422 `empty_text_field`."
-          },
-          "metadata": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metadata",
-            "description": "Customer metadata to merge onto the row. Keys present here replace same-named keys on the existing row; keys absent here are left untouched (no key deletion via PATCH). Setting an immutable field (entity ids, `type`, `created_at`) returns 422 `immutable_field`; setting an internal storage key (`tag1`-`tag5`, `kb_type`, etc.) returns 422 `reserved_field`."
-          }
-        },
-        "type": "object",
-        "title": "UpdateRequest",
-        "description": "PATCH /v1/memories/{id} \u2014 update text and/or metadata.\n\nMetadata is merged onto the existing payload, not replaced.\nImmutable fields (``type``, entity ids, ``created_at``) cannot be\nchanged via this endpoint; attempting to set them surfaces\n``422 immutable_field``."
       },
       "ValidationError": {
         "properties": {
@@ -1829,6 +1902,12 @@
         "bearerFormat": "Token",
         "description": "Long-lived API key sent as `Authorization: Token <api-key>`."
       },
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API key",
+        "description": "Long-lived API key sent as `Authorization: Bearer <api-key>`. This is the form the `@xtraceai/memory` SDK has shipped since its initial commit (through v0.2.1) and that the live API accepts; documented here additively per ADR-001 (A2a) alongside the `Token`/`x-api-key` schemes, which remain valid. Added because the spec previously documented only `Token`/`x-api-key`; nothing was removed."
+      },
       "OrgId": {
         "type": "apiKey",
         "in": "header",
@@ -1844,6 +1923,10 @@
     },
     {
       "BearerToken": [],
+      "OrgId": []
+    },
+    {
+      "BearerAuth": [],
       "OrgId": []
     }
   ]
