@@ -1,4 +1,5 @@
 import { defaultHttpConfig, HttpClient } from "./http.js";
+import type { AuthMode } from "./http.js";
 import { Groups } from "./groups.js";
 import { Memories } from "./memories.js";
 
@@ -15,6 +16,12 @@ export interface MemoryClientOptions {
   maxRetries?: number;
   /** Provide a custom request-id generator. Default: `req_<uuid>`. */
   requestIdFactory?: () => string;
+  /**
+   * How to present the API key on the wire. `'bearer'` (default) sends
+   * `Authorization: Bearer <apiKey>`; `'x-api-key'` sends `x-api-key: <apiKey>`
+   * and no `Authorization` header. `X-Org-Id` is sent in both modes.
+   */
+  authMode?: AuthMode;
 }
 
 export class MemoryClient {
@@ -33,6 +40,7 @@ export class MemoryClient {
         fetch: options.fetch,
         maxRetries: options.maxRetries,
         defaultRequestId: options.requestIdFactory,
+        authMode: options.authMode,
       }),
     );
     this.memories = new Memories(http);
