@@ -1,5 +1,6 @@
 export { MemoryClient } from "./client.js";
 export type { MemoryClientOptions } from "./client.js";
+export type { AuthMode } from "./http.js";
 
 export { Memories, renderMemoriesPrompt, DEFAULT_PROMPT_TEMPLATE } from "./memories.js";
 export type { IngestOptions, RequestContext } from "./memories.js";
@@ -12,6 +13,9 @@ export type { WebhookSetOptions } from "./webhooks.js";
 export { Jobs } from "./jobs.js";
 export type { PollOptions } from "./jobs.js";
 
+export { f } from "./filter.js";
+export type { Clause, Comparable, FieldOps } from "./filter.js";
+
 export {
   MemoryError,
   BadRequest,
@@ -23,6 +27,8 @@ export {
   RateLimited,
   ServerError,
 } from "./errors.js";
+
+export type { RateLimitSnapshot } from "./errors.js";
 
 export type {
   ApiErrorBody,
@@ -45,6 +51,7 @@ export type {
   ListEnvelope,
   ListQuery,
   Memory,
+  MemoryPatchRequest,
   MemoryRef,
   MemoryStatus,
   MemoryType,

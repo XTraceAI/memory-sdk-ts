@@ -2,11 +2,13 @@ import type { HttpClient } from "./http.js";
 import { Jobs } from "./jobs.js";
 import type {
   IngestJob,
+  IngestJobResult,
   IngestRequest,
   GroupListEnvelope,
   ListEnvelope,
   ListQuery,
   Memory,
+  MemoryPatchRequest,
   PromptTemplate,
   RecallParams,
   RecallResult,
@@ -224,16 +226,121 @@ export class Memories {
   }
 
   /**
+   * Resolve a superseded fact to its replacement.
+   *
+   * When an ingest supersedes an existing fact, the server reports the old →
+   * new id mapping in {@link IngestJobResult.memories_superseded_by} (and only
+   * there — there is no global "what replaced id X?" endpoint). This helper
+   * follows that map for you: pass the `IngestJobResult` and the old id, and it
+   * returns the replacement `Memory` (fetched via {@link get}), or `null` when
+   * `oldId` was not superseded in this ingest.
+   *
+   * Takes the result explicitly rather than pretending old ids are globally
+   * queryable — the superseded map lives only on the job result. See
+   * ADR-002 (C2) for the rationale.
+   *
+   * ```ts
+   * const done = await client.memories.jobs.pollUntilDone(job.id);
+   * const replacement = await client.memories.resolveSuperseded(done.result!, oldId);
+   * // replacement is the new Memory, or null if oldId wasn't superseded
+   * ```
+   */
+  async resolveSuperseded(
+    result: IngestJobResult,
+    oldId: string,
+    context: RequestContext = {},
+  ): Promise<Memory | null> {
+    const newId = result.memories_superseded_by?.[oldId];
+    return newId ? this.get(newId, context) : null;
+  }
+
+  /**
+   * Batch twin of {@link resolveSuperseded}: resolve **every** fact this ingest
+   * superseded to its replacement in one call. Returns a `Map` keyed by the old
+   * id whose value is the replacement `Memory`. An ingest that superseded
+   * nothing yields an empty map.
+   *
+   * The per-id `get()` fetches run in parallel. Like {@link resolveSuperseded},
+   * it reads the mapping from {@link IngestJobResult.memories_superseded_by}.
+   *
+   * ```ts
+   * const replacements = await client.memories.resolveAllSuperseded(done.result!);
+   * for (const [oldId, replacement] of replacements) {
+   *   // ...
+   * }
+   * ```
+   */
+  async resolveAllSuperseded(
+    result: IngestJobResult,
+    context: RequestContext = {},
+  ): Promise<Map<string, Memory>> {
+    const entries = Object.entries(result.memories_superseded_by ?? {});
+    const resolved = await Promise.all(
+      entries.map(async ([oldId, newId]) => [oldId, await this.get(newId, context)] as const),
+    );
+    return new Map(resolved);
+  }
+
+  /**
    * Hard-delete a memory by id. The point is removed outright (no tombstone):
    * afterwards `get` returns 404, it's gone from list/search, and a second
-   * delete returns 404 (idempotent by absence). Corrections flow through
-   * ingest, not a PATCH — the memory API has no update endpoint.
+   * delete returns 404 (idempotent by absence). PATCH exists only for editing a
+   * memory's group membership (see {@link patch}); content corrections flow
+   * through ingest/supersede, not an in-place text update.
    */
   async delete(id: string, context: RequestContext = {}): Promise<void> {
     await this.http.request<void>("DELETE", `/v1/memories/${encodeURIComponent(id)}`, {
       signal: context.signal,
       requestId: context.requestId,
     });
+  }
+
+  /**
+   * Edit a memory's group membership — the **only** in-place mutate op on a
+   * memory. Add and/or remove group tags via
+   * `{ add_group_ids?, remove_group_ids? }`; the server returns the full updated
+   * {@link Memory} with its new `group_ids`. This is the live
+   * `PATCH /v1/memories/{id}` contract verified against the deployed API
+   * (gitban card 2syddu); the old `{ text, metadata }` update the spec once
+   * documented is gone — content corrections flow through ingest/supersede.
+   *
+   * At least one array must carry an entry. An empty patch (`{}`, or both arrays
+   * empty) throws **before** any request — mirroring the server's
+   * `422 empty_patch` and saving a doomed round-trip (same loud-throw style as
+   * {@link recall}). An empty array is treated like an absent field and is not
+   * sent on the wire, so only the populated arrays appear in the request body.
+   *
+   * ```ts
+   * // add to a group:
+   * const m = await client.memories.patch("mem_1", { add_group_ids: ["grp_x"] });
+   * m.group_ids; // ["grp_x"]
+   * // remove from a group:
+   * await client.memories.patch("mem_1", { remove_group_ids: ["grp_x"] });
+   * ```
+   */
+  async patch(
+    id: string,
+    changes: MemoryPatchRequest,
+    context: RequestContext = {},
+  ): Promise<Memory> {
+    const add = changes.add_group_ids ?? [];
+    const remove = changes.remove_group_ids ?? [];
+    if (add.length === 0 && remove.length === 0) {
+      throw new Error(
+        "memories.patch(): provide at least one of add_group_ids or remove_group_ids " +
+          "(the server rejects an empty patch with 422 empty_patch)",
+      );
+    }
+    const body: MemoryPatchRequest = {};
+    if (add.length > 0) body.add_group_ids = add;
+    if (remove.length > 0) body.remove_group_ids = remove;
+
+    const { body: res } = await this.http.request<Memory>(
+      "PATCH",
+      `/v1/memories/${encodeURIComponent(id)}`,
+      { body, signal: context.signal, requestId: context.requestId },
+    );
+    return res;
   }
 
   /** Vector + filter search. */
@@ -244,6 +351,35 @@ export class Memories {
       requestId: context.requestId,
     });
     return response;
+  }
+
+  /**
+   * Iterate every memory matching a search query, auto-paginating until the
+   * server says `has_more: false`. The async-generator twin of {@link list},
+   * for {@link search} instead of the list endpoint:
+   *
+   * ```ts
+   * for await (const m of client.memories.searchAll({ query: "q", user_id: "alice" })) {
+   *   // ...
+   * }
+   * ```
+   *
+   * Each page is a fresh `{ ...body, cursor }` spread, so the caller's `body`
+   * object is never mutated — the same request can be reused across calls.
+   *
+   * For a stable full sweep, prefer `mode: "retrieve"` (the raw vector-ranked
+   * set): the default `"compose"` re-runs the per-page LLM selection pass, so a
+   * cursor threaded across compose pages can re-rank between pages and re-incurs
+   * the compose cost on every fetch.
+   */
+  async *searchAll(body: SearchRequest, context: RequestContext = {}): AsyncGenerator<Memory, void, void> {
+    let cursor = body.cursor;
+    while (true) {
+      const env = await this.search({ ...body, cursor }, context);
+      for (const memory of env.data) yield memory;
+      if (!env.has_more || !env.next_cursor) return;
+      cursor = env.next_cursor;
+    }
   }
 
   /**
@@ -281,6 +417,11 @@ export class Memories {
    * Pass `pools` — the scopes to union. Axes within a pool AND; pools OR. At
    * least one pool (each with ≥1 axis) is required.
    *
+   * Pass `include: ["full_content"]` to fetch heavy artifact bodies on the
+   * returned rows in the same round-trip — it's forwarded to every per-pool
+   * search, so `ArtifactDetails.full_content` is populated on the merged set
+   * without follow-up `get()` calls.
+   *
    * @example
    * // personal + a group ("my stuff OR the trip's stuff"):
    * const { prompt } = await client.memories.recall({
@@ -313,7 +454,7 @@ export class Memories {
       ) => string;
     } & RequestContext = {},
   ): Promise<RecallResult> {
-    const { query } = params;
+    const { query, include } = params;
     const mode = params.mode ?? "compose";
     const limit = params.limit ?? 10;
 
@@ -364,9 +505,15 @@ export class Memories {
     const poolLabel = (p: ScopePool): string =>
       p.group_ids && p.group_ids.length > 0 ? "shared" : p.user_id ? "personal" : "scope";
 
+    // `include` (full_content only — KD-5) rides on EVERY per-pool search so the
+    // merged rows are uniformly enriched. Spread it only when it carries fields:
+    // omitting the option — or passing an empty `include: []` (truthy, but a
+    // no-op) — must leave the wire request byte-identical to today's. `...pool`
+    // carries no `include` axis, so there's no collision.
+    const includeFields = include && include.length > 0 ? { include } : {};
     const jobs = pools.map((pool) => ({
       pool,
-      promise: this.search({ query, mode, limit, ...pool }, ctx),
+      promise: this.search({ query, mode, limit, ...includeFields, ...pool }, ctx),
     }));
 
     // Resolve group id → name from the registry when any pool targets a group,

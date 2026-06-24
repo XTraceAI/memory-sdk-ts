@@ -1,5 +1,21 @@
-import { errorForStatus, MemoryError, RateLimited, ServerError } from "./errors.js";
-import type { ApiErrorBody } from "./types.js";
+import { errorForStatus, MemoryError, parseErrorBody, RateLimited, ServerError } from "./errors.js";
+import type { RateLimitSnapshot } from "./errors.js";
+
+/**
+ * How the API key is presented on the wire. `'bearer'` (default) sends
+ * `Authorization: Bearer <apiKey>`; `'x-api-key'` sends `x-api-key: <apiKey>`
+ * and no `Authorization` header. An enum (not a boolean) so a future `Token`
+ * form can be added without renaming.
+ *
+ * The scheme is purely a wire-format choice — it carries **no rate-limit
+ * advantage**. Both schemes are rate-limited against the same
+ * `(org_id, key_hash)` bucket, so switching from `Bearer` to `x-api-key` does
+ * not buy extra quota. (An early n=1 probe appeared to show a 10× quota
+ * difference; a controlled n=8 re-probe showed that was a first-call cold-start
+ * artifact tracking call position, not the auth scheme — see card 2syddu and
+ * ADR-003 A2 / KD-6.) `Bearer` therefore stays the default.
+ */
+export type AuthMode = "bearer" | "x-api-key";
 
 export interface HttpClientConfig {
   apiKey: string;
@@ -8,6 +24,8 @@ export interface HttpClientConfig {
   fetch: typeof globalThis.fetch;
   defaultRequestId?: () => string;
   maxRetries: number;
+  /** How to present the API key. Defaults to `'bearer'`. */
+  authMode?: AuthMode;
   /** Hook for tests; pass a no-op to disable real timers. */
   sleep: (ms: number) => Promise<void>;
 }
@@ -30,7 +48,7 @@ function makeRequestId(): string {
 export class HttpClient {
   constructor(private readonly config: HttpClientConfig) {}
 
-  async request<T>(method: string, path: string, options: RequestOptions = {}): Promise<{ body: T; status: number; requestId: string | undefined }> {
+  async request<T>(method: string, path: string, options: RequestOptions = {}): Promise<{ body: T; status: number; requestId: string | undefined; rateLimit: RateLimitSnapshot | undefined }> {
     const url = new URL(path, this.config.baseUrl);
     if (options.query) {
       for (const [k, v] of Object.entries(options.query)) {
@@ -41,11 +59,15 @@ export class HttpClient {
     const requestId = options.requestId ?? this.config.defaultRequestId?.() ?? makeRequestId();
 
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.config.apiKey}`,
       "X-Org-Id": this.config.orgId,
       "X-Request-Id": requestId,
       Accept: "application/json",
     };
+    if (this.config.authMode === "x-api-key") {
+      headers["x-api-key"] = this.config.apiKey;
+    } else {
+      headers["Authorization"] = `Bearer ${this.config.apiKey}`;
+    }
 
     let body: string | undefined;
     if (options.body !== undefined) {
@@ -75,19 +97,20 @@ export class HttpClient {
       }
 
       const respRequestId = response.headers.get("x-request-id") ?? requestId;
+      const rateLimit = parseRateLimit(response.headers);
 
       if (response.status === 204) {
-        return { body: undefined as T, status: response.status, requestId: respRequestId };
+        return { body: undefined as T, status: response.status, requestId: respRequestId, rateLimit };
       }
 
       const text = await response.text();
       const parsed: unknown = text ? safeJson(text) : null;
 
       if (response.ok) {
-        return { body: parsed as T, status: response.status, requestId: respRequestId };
+        return { body: parsed as T, status: response.status, requestId: respRequestId, rateLimit };
       }
 
-      const err = toError(response, parsed, respRequestId);
+      const err = toError(response, parsed, respRequestId, rateLimit);
       const retryable = err instanceof RateLimited || (err instanceof ServerError && idempotent);
       if (retryable && attempt < this.config.maxRetries && !options.signal?.aborted) {
         attempt++;
@@ -114,16 +137,63 @@ function safeJson(text: string): unknown {
   }
 }
 
-function toError(response: Response, parsed: unknown, requestId: string | undefined): MemoryError {
-  const body = (parsed as ApiErrorBody | null)?.error;
+function toError(
+  response: Response,
+  parsed: unknown,
+  requestId: string | undefined,
+  rateLimit: RateLimitSnapshot | undefined,
+): MemoryError {
+  const body = parseErrorBody(parsed);
   const retryAfterHeader = response.headers.get("retry-after");
   const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : undefined;
   return errorForStatus(
     response.status,
-    body ?? null,
+    body,
     requestId,
     Number.isFinite(retryAfter) ? retryAfter : undefined,
+    rateLimit,
   );
+}
+
+/**
+ * Parse the rate-limit response headers into a {@link RateLimitSnapshot}.
+ *
+ * The live deployment emits the `x-ratelimit-*` family (`x-ratelimit-limit` /
+ * `-remaining` / `-reset`), so each field reads that name first and falls back
+ * per-field to the un-prefixed `RateLimit-*` name. The fallback is read with the
+ * same `??` selection so the proven-live family wins on a tie; `RateLimit-*` is
+ * retained as the unobserved-but-tolerated fallback (ADR-003 A3). The two
+ * families are distinct `Headers.get()` lookups — the `x-` prefix is a literal
+ * part of the name, not a case variant — so the selection is per field rather
+ * than all-x-or-all-plain.
+ *
+ * `reset` is surfaced as the raw header value: against the live server it is an
+ * absolute epoch-seconds timestamp (see {@link RateLimitSnapshot.reset}), and
+ * no conversion is applied here. Each field is included only when its header is
+ * present and numerically finite; if no field survives, returns `undefined`
+ * (an absent bucket, never an empty object). Never throws.
+ */
+function parseRateLimit(headers: Headers): RateLimitSnapshot | undefined {
+  const num = (name: string): number | undefined => {
+    const raw = headers.get(name);
+    // Drop absent, empty, and whitespace-only headers: `Number("")` and
+    // `Number("   ")` both coerce to a finite 0, which would otherwise be
+    // reported as `remaining: 0` (a falsely-exhausted bucket).
+    if (raw === null || raw.trim() === "") return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  // x-ratelimit-* (proven live) first, RateLimit-* as a per-field fallback.
+  const pick = (xName: string, plainName: string): number | undefined =>
+    num(xName) ?? num(plainName);
+  const snapshot: RateLimitSnapshot = {};
+  const limit = pick("x-ratelimit-limit", "RateLimit-Limit");
+  const remaining = pick("x-ratelimit-remaining", "RateLimit-Remaining");
+  const reset = pick("x-ratelimit-reset", "RateLimit-Reset");
+  if (limit !== undefined) snapshot.limit = limit;
+  if (remaining !== undefined) snapshot.remaining = remaining;
+  if (reset !== undefined) snapshot.reset = reset;
+  return Object.keys(snapshot).length > 0 ? snapshot : undefined;
 }
 
 export function defaultHttpConfig(input: {
@@ -133,6 +203,7 @@ export function defaultHttpConfig(input: {
   fetch?: typeof globalThis.fetch;
   maxRetries?: number;
   defaultRequestId?: () => string;
+  authMode?: AuthMode;
 }): HttpClientConfig {
   return {
     apiKey: input.apiKey,
@@ -141,6 +212,7 @@ export function defaultHttpConfig(input: {
     fetch: input.fetch ?? globalThis.fetch.bind(globalThis),
     maxRetries: input.maxRetries ?? 2,
     defaultRequestId: input.defaultRequestId,
+    authMode: input.authMode ?? "bearer",
     sleep: defaultSleep,
   };
 }

@@ -139,18 +139,32 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Update a memory's text and/or metadata
-         * @description Update text and/or metadata.
+         * Edit a memory's group memberships
+         * @description Add and/or remove group memberships on an existing memory. **Live
+         *     endpoint** — verified against the deployed API (gitban card 2syddu /
+         *     ADR-003 A4).
          *
-         *     - ``text`` change → supersede (create a new ACTIVE fact pointing
-         *       back at the old one via ``supersedes``); fact-only operation.
-         *     - ``metadata`` change → merge onto the existing payload in place
-         *       (works for any type).
-         *     - Both → text supersede; the new revision carries the merged
-         *       metadata. The old revision keeps its original metadata.
+         *     The earlier `[REMOVED — returns 405]` annotation was **wrong**: the
+         *     live probe confirmed `PATCH /v1/memories/{memory_id}` exists and its
+         *     current contract is group-membership editing, not the old
+         *     `{text, metadata}` `UpdateRequest`. (That old content-edit contract is
+         *     genuinely gone; corrections to a memory's *content* still flow through
+         *     ingest / supersede via `POST /v1/memories`.)
          *
-         *     Trying to set an entity id / ``type`` / ``created_at`` via
-         *     ``metadata`` surfaces ``422 immutable_field``.
+         *     Contract:
+         *
+         *     - Request body is `{add_group_ids?, remove_group_ids?}`; at least one
+         *       must carry an entry. An empty body (or both arrays empty) returns
+         *       `422` with `error.code = "empty_patch"`.
+         *     - On success returns `200 OK` + the full updated `Memory` (identical
+         *       shape to `GET /v1/memories/{memory_id}`), with `group_ids`
+         *       reflecting the edit.
+         *     - API-key callers only; a service-token (first-party portal) caller
+         *       gets `403 forbidden` (same as ingest / DELETE).
+         *
+         *     The `@xtraceai/memory` SDK exposes this as
+         *     `memories.patch(id, {add_group_ids?, remove_group_ids?}): Promise<Memory>`,
+         *     which also guards the empty-patch case client-side.
          */
         patch: operations["patch_memory_v1_memories__memory_id__patch"];
         trace?: never;
@@ -160,16 +174,66 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * ErrorDetail
-         * @description Inner ``detail`` block on every non-2xx response raised by a
-         *     memory-API route handler. ``code`` is the stable identifier
-         *     clients should switch on; ``message`` is a sanitized human-
-         *     readable summary.
+         * ErrorFieldError
+         * @description One per-field validation error, as carried in `error.details.errors`
+         *     on a 422 response. The live deployment uses `{field, message, type}`
+         *     (NOT the FastAPI-default `{loc, msg, type}`). Verified against the live
+         *     API (gitban card 2syddu / ADR-003 A1).
          */
-        ErrorDetail: {
+        ErrorFieldError: {
+            /**
+             * Field
+             * @description Name of the request field that failed validation.
+             * @example query
+             */
+            field: string;
+            /**
+             * Message
+             * @description Human-readable description of the validation failure.
+             * @example Field required
+             */
+            message: string;
+            /**
+             * Type
+             * @description Stable validation-failure type identifier.
+             * @example missing
+             */
+            type: string;
+        };
+        /**
+         * ErrorDetails
+         * @description Optional structured detail attached to an error. On 422 responses
+         *     it carries an `errors` array of per-field `{field, message, type}`
+         *     entries. Other endpoints may attach additional keys.
+         */
+        ErrorDetails: {
+            /**
+             * Errors
+             * @description Per-field validation errors. Present on 422 responses.
+             */
+            errors?: components["schemas"]["ErrorFieldError"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ErrorBody
+         * @description Inner `error` object on every non-2xx response raised by a memory-API
+         *     route handler. `code` is the stable identifier clients should switch
+         *     on; `message` is a sanitized human-readable summary; `request_id`
+         *     mirrors the `X-Request-Id` header; `details` is optional structured
+         *     data (per-field validation errors on 422). Verified against the live
+         *     API (gitban card 2syddu / ADR-003 A1).
+         */
+        ErrorBody: {
+            /**
+             * Type
+             * @description Error class — the broad category of failure.
+             * @example invalid_request_error
+             */
+            type: string;
             /**
              * Code
-             * @description Stable error identifier. Switch on this rather than parsing the message. Common values: `invalid_request`, `invalid_messages`, `memory_not_found`, `job_not_found`, `immutable_field`, `reserved_field`, `empty_text_field`, `missing_user_id`, `missing_conv_id`, `unsupported_include_option`, `cursor_mismatch`, `unauthorized`, `forbidden`, `rate_limited`, `delete_failed`, `search_failed`, `ingest_failed`, `server_error`.
+             * @description Stable error identifier. Switch on this rather than parsing the message. Common values: `invalid_request`, `invalid_messages`, `empty_patch`, `memory_not_found`, `job_not_found`, `immutable_field`, `reserved_field`, `empty_text_field`, `missing_user_id`, `missing_conv_id`, `unsupported_include_option`, `cursor_mismatch`, `unauthorized`, `forbidden`, `rate_limited`, `delete_failed`, `search_failed`, `ingest_failed`, `server_error`.
              * @example memory_not_found
              */
             code: string;
@@ -179,17 +243,28 @@ export interface components {
              * @example Memory 0fa1c0e6-... not found
              */
             message: string;
+            /**
+             * Request Id
+             * @description Server-generated request id, echoed in the `X-Request-Id` response header. Use it when filing support requests.
+             */
+            request_id?: string;
+            /**
+             * Details
+             * @description Optional structured detail; on 422 carries `errors` (per-field validation errors).
+             */
+            details?: components["schemas"]["ErrorDetails"] | null;
         };
         /**
          * ErrorEnvelope
-         * @description Standard error body for non-2xx responses raised by the memory
-         *     API. Pydantic field-validation failures (422) use the FastAPI-
-         *     default ``HTTPValidationError`` shape instead, where ``detail`` is
-         *     an array of per-field error entries — switch on the response
-         *     status code to pick the right shape.
+         * @description Standard error body for all non-2xx responses raised by the memory
+         *     API: a single top-level `error` object. The previously-documented
+         *     `{detail: {...}}` / FastAPI `detail: [{loc, msg, type}]` shapes are NOT
+         *     produced by the live deployment (gitban card 2syddu / ADR-003 A1); the
+         *     `@xtraceai/memory` SDK still tolerates them defensively. Switch on
+         *     `error.code`; per-field 422 errors live under `error.details.errors`.
          */
         ErrorEnvelope: {
-            detail: components["schemas"]["ErrorDetail"];
+            error: components["schemas"]["ErrorBody"];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -606,6 +681,28 @@ export interface components {
             extras?: components["schemas"]["SearchExtras"] | null;
         };
         /**
+         * MemoryPatchRequest
+         * @description Body for `PATCH /v1/memories/{memory_id}` — the live group-membership
+         *     edit contract (gitban card 2syddu / ADR-003 A4). At least one of
+         *     `add_group_ids` / `remove_group_ids` must carry an entry; an empty
+         *     patch returns `422 empty_patch`. This is the **only** mutate-in-place
+         *     operation; the old `{text, metadata}` `UpdateRequest` is gone (content
+         *     corrections flow through ingest / supersede). The `@xtraceai/memory`
+         *     SDK surfaces this as `MemoryPatchRequest`.
+         */
+        MemoryPatchRequest: {
+            /**
+             * Add Group Ids
+             * @description Group ids to add this memory to. Omit or send `[]` to add nothing.
+             */
+            add_group_ids?: string[] | null;
+            /**
+             * Remove Group Ids
+             * @description Group ids to remove this memory from. Omit or send `[]` to remove nothing.
+             */
+            remove_group_ids?: string[] | null;
+        };
+        /**
          * SearchRequest
          * @description POST /v1/memories/search — vector + filter search over the
          *     unified memory pool. No ``mode`` flag; opt into composed output
@@ -664,29 +761,6 @@ export interface components {
              * @description Opt-in extras. `full_content` populates `details.full_content` on artifact rows (no-op for facts/episodes). `context_prompt` runs xmem's retrieval-agent pipeline; the assembled markdown lands under `extras.context_prompt` and requires both `user_id` and `conv_id` in `filters`.
              */
             include?: ("full_content" | "context_prompt")[];
-        };
-        /**
-         * UpdateRequest
-         * @description PATCH /v1/memories/{id} — update text and/or metadata.
-         *
-         *     Metadata is merged onto the existing payload, not replaced.
-         *     Immutable fields (``type``, entity ids, ``created_at``) cannot be
-         *     changed via this endpoint; attempting to set them surfaces
-         *     ``422 immutable_field``.
-         */
-        UpdateRequest: {
-            /**
-             * Text
-             * @description New fact text. When provided, supersedes the existing fact: a new ACTIVE row is created pointing back at the old one via `supersedes`, the old row's `tag2` flips to superseded. Fact-only — sending `text` on an artifact or episode row returns 422. Empty / whitespace-only values return 422 `empty_text_field`.
-             */
-            text?: string | null;
-            /**
-             * Metadata
-             * @description Customer metadata to merge onto the row. Keys present here replace same-named keys on the existing row; keys absent here are left untouched (no key deletion via PATCH). Setting an immutable field (entity ids, `type`, `created_at`) returns 422 `immutable_field`; setting an internal storage key (`tag1`-`tag5`, `kb_type`, etc.) returns 422 `reserved_field`.
-             */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -856,7 +930,7 @@ export interface operations {
                     "application/json": components["schemas"]["ListEnvelope"];
                 };
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -874,7 +948,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
+            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry. */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -883,7 +957,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Server-side failure. Body carries `detail.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
+            /** @description Server-side failure. Body carries `error.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -928,7 +1002,7 @@ export interface operations {
                     "application/json": components["schemas"]["IngestJobResponse"];
                 };
             };
-            /** @description `detail.code = "invalid_messages"` — empty `messages` array. */
+            /** @description `error.code = "invalid_messages"` — empty `messages` array. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -937,7 +1011,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -946,7 +1020,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE — those are reserved for API-key callers. Body carries `detail.code = "forbidden"`. */
+            /** @description Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE — those are reserved for API-key callers. Body carries `error.code = "forbidden"`. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -964,7 +1038,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
+            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry. */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -973,7 +1047,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Server-side failure. Body carries `detail.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
+            /** @description Server-side failure. Body carries `error.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1004,7 +1078,7 @@ export interface operations {
                     "application/json": components["schemas"]["IngestJobResponse"];
                 };
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1013,7 +1087,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `detail.code = "job_not_found"` — unknown job id or tenant mismatch. */
+            /** @description `error.code = "job_not_found"` — unknown job id or tenant mismatch. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -1031,7 +1105,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
+            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry. */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -1040,7 +1114,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Server-side failure. Body carries `detail.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
+            /** @description Server-side failure. Body carries `error.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1073,7 +1147,7 @@ export interface operations {
                     "application/json": components["schemas"]["SearchListEnvelope"];
                 };
             };
-            /** @description `detail.code = "missing_user_id"` or `"missing_conv_id"` — `include=context_prompt` was requested but the corresponding entity is absent from `filters` (the retrieval-agent pipeline needs both to construct the right cache namespace). */
+            /** @description `error.code = "missing_user_id"` or `"missing_conv_id"` — `include=context_prompt` was requested but the corresponding entity is absent from `filters` (the retrieval-agent pipeline needs both to construct the right cache namespace). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -1082,7 +1156,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1100,7 +1174,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
+            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry. */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -1109,7 +1183,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Server-side failure. Body carries `detail.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
+            /** @description Server-side failure. Body carries `error.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1140,7 +1214,7 @@ export interface operations {
                     "application/json": components["schemas"]["Memory"];
                 };
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1149,7 +1223,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `detail.code = "memory_not_found"` — no row with that id under this org. */
+            /** @description `error.code = "memory_not_found"` — no row with that id under this org. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -1167,7 +1241,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
+            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry. */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -1176,7 +1250,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Server-side failure. Body carries `detail.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
+            /** @description Server-side failure. Body carries `error.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1205,7 +1279,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1214,7 +1288,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE — those are reserved for API-key callers. Body carries `detail.code = "forbidden"`. */
+            /** @description Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE — those are reserved for API-key callers. Body carries `error.code = "forbidden"`. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -1223,7 +1297,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `detail.code = "memory_not_found"` — unknown id, or a fact that was already soft-deleted (`tag2` is anything other than `active`). */
+            /** @description `error.code = "memory_not_found"` — unknown id, or a fact that was already soft-deleted (`tag2` is anything other than `active`). */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -1241,7 +1315,7 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
-            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
+            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry. */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -1250,7 +1324,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `detail.code = "delete_failed"` — storage error on hard delete (artifacts / episodes). */
+            /** @description `error.code = "delete_failed"` — storage error on hard delete (artifacts / episodes). */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1272,11 +1346,11 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpdateRequest"];
+                "application/json": components["schemas"]["MemoryPatchRequest"];
             };
         };
         responses: {
-            /** @description Successful Response */
+            /** @description Successful Response — the full updated `Memory`, `group_ids` reflecting the edit. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1285,16 +1359,7 @@ export interface operations {
                     "application/json": components["schemas"]["Memory"];
                 };
             };
-            /** @description `detail.code = "invalid_request"` — empty PATCH body (neither `text` nor `metadata`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `error.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1303,7 +1368,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE — those are reserved for API-key callers. Body carries `detail.code = "forbidden"`. */
+            /** @description Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE — those are reserved for API-key callers. Body carries `error.code = "forbidden"`. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -1312,7 +1377,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `detail.code = "memory_not_found"`. */
+            /** @description `error.code = "memory_not_found"` — no row with that id under this org. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -1321,7 +1386,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Validation error. Possible codes: `immutable_field` (entity ids / `type` / `created_at` in `metadata`), `reserved_field` (internal storage key in `metadata`), `empty_text_field` (empty / whitespace-only `text`), or `invalid_request` (`text` patch on a non-fact row). */
+            /** @description `error.code = "empty_patch"` — the body carried neither `add_group_ids` nor `remove_group_ids` (or both were empty). Provide at least one group id to add or remove. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1330,7 +1395,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
+            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `x-ratelimit-*` response headers indicate when to retry. */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -1339,7 +1404,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Server-side failure. Body carries `detail.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
+            /** @description Server-side failure. Body carries `error.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
             500: {
                 headers: {
                     [name: string]: unknown;
