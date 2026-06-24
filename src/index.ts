@@ -6,6 +6,9 @@ export type { IngestOptions, RequestContext } from "./memories.js";
 
 export { Groups } from "./groups.js";
 
+export { Webhooks, verifyWebhookSignature, parseWebhookEvent } from "./webhooks.js";
+export type { WebhookSetOptions } from "./webhooks.js";
+
 export { Jobs } from "./jobs.js";
 export type { PollOptions } from "./jobs.js";
 
@@ -55,4 +58,11 @@ export type {
   SearchListEnvelope,
   SearchMode,
   SearchRequest,
+  WebhookConfig,
+  WebhookConfigRequest,
+  WebhookCompletedEvent,
+  WebhookEvent,
+  WebhookEventPayload,
+  WebhookFailedEvent,
+  WebhookMemoryRef,
 } from "./types.js";

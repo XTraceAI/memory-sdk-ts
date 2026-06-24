@@ -1,6 +1,7 @@
 import { defaultHttpConfig, HttpClient } from "./http.js";
 import { Groups } from "./groups.js";
 import { Memories } from "./memories.js";
+import { Webhooks } from "./webhooks.js";
 
 export interface MemoryClientOptions {
   /** API key (`xtk_…`). Required. */
@@ -20,6 +21,7 @@ export interface MemoryClientOptions {
 export class MemoryClient {
   readonly memories: Memories;
   readonly groups: Groups;
+  readonly webhooks: Webhooks;
 
   constructor(options: MemoryClientOptions) {
     if (!options.apiKey) throw new Error("MemoryClient: apiKey is required");
@@ -37,5 +39,6 @@ export class MemoryClient {
     );
     this.memories = new Memories(http);
     this.groups = new Groups(http);
+    this.webhooks = new Webhooks(http);
   }
 }

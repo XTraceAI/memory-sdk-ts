@@ -1,6 +1,6 @@
 {
   "name": "@xtraceai/memory",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "TypeScript SDK for the xtrace memory API — with a Vercel AI SDK integration at @xtraceai/memory/ai-sdk",
   "license": "MIT",
   "type": "module",
