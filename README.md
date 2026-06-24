@@ -202,7 +202,7 @@ app.post("/hooks/xtrace", express.raw({ type: "application/json" }), async (req,
 });
 ```
 
-Delivery is best-effort (at-most-once with a few retries); `client.memories.jobs.pollUntilDone(jobId)` remains the fallback for anything you can't miss. See the [Webhooks guide](https://docs.xtrace.ai/guides/webhooks) for the full contract.
+Delivery is best-effort with a few retries — an event may be **dropped or duplicated**, so make your handler idempotent (dedupe on `job_id`), and use `client.memories.jobs.pollUntilDone(jobId)` as the fallback for anything you can't miss. See the [Webhooks guide](https://docs.xtrace.ai/guides/webhooks) for the full contract.
 
 ## Error handling
 
