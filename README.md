@@ -159,6 +159,51 @@ const result = streamText({
 
 The model gets two tools: `search_memory(query, limit?)` and `save_memory(fact)`. Use `{ includeSave: false }` for read-only.
 
+## Webhooks
+
+Register one endpoint per org and XTrace POSTs a signed event when an ingest job finishes — `memory.learning.completed` (fires even when nothing was extracted, so you can unblock the user) or `memory.learning.failed` — instead of you polling `client.memories.jobs`.
+
+```ts
+// Register (or replace) the org's webhook. The full `secret` is returned only
+// here — on first create or `{ rotateSecret: true }`. Store it.
+const wh = await client.webhooks.set({ url: "https://your-app.com/hooks/xtrace" });
+console.log(wh.secret); // whsec_… — save this
+
+await client.webhooks.get();    // current config (secret masked)
+await client.webhooks.delete(); // remove it (idempotent)
+```
+
+On your endpoint, verify the `X-Webhook-Signature` over the **raw body** before trusting the event. `verifyWebhookSignature` / `parseWebhookEvent` use Web Crypto, so they run in Node 18+, browsers, and edge runtimes:
+
+```ts
+import express from "express";
+import { parseWebhookEvent, type WebhookEventPayload } from "@xtraceai/memory";
+
+const app = express();
+
+// Capture the RAW body — re-serializing a parsed object breaks the signature.
+app.post("/hooks/xtrace", express.raw({ type: "application/json" }), async (req, res) => {
+  let event: WebhookEventPayload;
+  try {
+    event = await parseWebhookEvent({
+      payload: req.body, // Buffer / raw bytes
+      signature: req.header("X-Webhook-Signature") ?? "",
+      secret: process.env.XTRACE_WEBHOOK_SECRET!,
+    });
+  } catch {
+    return res.status(401).end(); // signature didn't verify
+  }
+
+  if (event.event === "memory.learning.completed") {
+    // event.conv_id / event.user_id correlate back to your ingest call
+    console.log("ready:", event.conv_id, event.memories.map((m) => m.id));
+  }
+  res.status(200).end(); // ack with any 2xx
+});
+```
+
+Delivery is best-effort (at-most-once with a few retries); `client.memories.jobs.pollUntilDone(jobId)` remains the fallback for anything you can't miss. See the [Webhooks guide](https://docs.xtrace.ai/guides/webhooks) for the full contract.
+
 ## Error handling
 
 All errors extend `MemoryError`. Match on `error.code` for stable machine-readable handling:

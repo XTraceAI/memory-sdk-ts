@@ -336,6 +336,71 @@ export interface GroupListEnvelope {
   data: Group[];
 }
 
+// ── Webhooks (ingestion-completion notifications — /v1/webhooks) ────────────
+
+/** Events a webhook can deliver. */
+export type WebhookEvent = "memory.learning.completed" | "memory.learning.failed";
+
+/** The org's webhook configuration. One per org. */
+export interface WebhookConfig {
+  object: "webhook";
+  /** Subscriber URL XTrace POSTs terminal ingest events to. */
+  url: string;
+  events: WebhookEvent[];
+  enabled: boolean;
+  /**
+   * HMAC signing secret (`whsec_…`). Returned in **full only when freshly
+   * minted** — `set()` on first create, or `set(body, { rotateSecret: true })`.
+   * Every other response (a plain `set()` edit, or `get()`) returns it masked
+   * (`whsec_••••wxyz`). Store the full value to verify signatures.
+   */
+  secret: string;
+  created_at: string;
+  updated_at: string | null;
+}
+
+/** Body for {@link Webhooks.set} (`PUT /v1/webhooks`). */
+export interface WebhookConfigRequest {
+  /** HTTPS URL that must resolve to a public address. */
+  url: string;
+  /** Events to receive. Omit to subscribe to all. An empty array is rejected. */
+  events?: WebhookEvent[];
+  /** When false, the config is stored but deliveries are paused. Defaults to true. */
+  enabled?: boolean;
+}
+
+/** Thin memory reference carried in a webhook payload (`{ id, type }` — no `text`). */
+export interface WebhookMemoryRef {
+  id: string;
+  type: MemoryType;
+}
+
+/** Payload delivered for `memory.learning.completed`. */
+export interface WebhookCompletedEvent {
+  event: "memory.learning.completed";
+  job_id: string;
+  /** The `conv_id` / `user_id` you passed at ingest, echoed back for correlation. */
+  conv_id: string;
+  user_id: string;
+  /** Newly-learned memories. May be empty — the event still fires (the conversation was processed). */
+  memories: WebhookMemoryRef[];
+  memories_updated: WebhookMemoryRef[];
+  timestamp: string;
+}
+
+/** Payload delivered for `memory.learning.failed`. */
+export interface WebhookFailedEvent {
+  event: "memory.learning.failed";
+  job_id: string;
+  conv_id: string;
+  user_id: string;
+  error: { type: string; code: string; message: string };
+  timestamp: string;
+}
+
+/** Discriminated union of webhook payloads — switch on `event`. */
+export type WebhookEventPayload = WebhookCompletedEvent | WebhookFailedEvent;
+
 export interface ApiErrorBody {
   error: {
     type: string;
