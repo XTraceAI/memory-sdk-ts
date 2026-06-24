@@ -73,6 +73,28 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /**
+ * Resolve a `SubtleCrypto` across runtimes. Browsers, edge runtimes, and
+ * Node 19+ expose `globalThis.crypto.subtle`. On Node 18.x the global is gated
+ * behind `--experimental-global-webcrypto`, but `node:crypto`'s `webcrypto` is
+ * always present — so fall back to it (lazily imported, so non-Node bundles
+ * never pull in `node:crypto`).
+ */
+async function resolveSubtle(): Promise<SubtleCrypto> {
+  const fromGlobal = globalThis.crypto?.subtle;
+  if (fromGlobal) return fromGlobal;
+  try {
+    const { webcrypto } = await import("node:crypto");
+    if (webcrypto?.subtle) return webcrypto.subtle as SubtleCrypto;
+  } catch {
+    // Not a Node runtime — fall through to the error below.
+  }
+  throw new Error(
+    "verifyWebhookSignature requires Web Crypto. Available in browsers, edge " +
+      "runtimes, and Node 19+; on Node 18 it falls back to node:crypto.webcrypto.",
+  );
+}
+
+/**
  * Verify the `X-Webhook-Signature` header on an incoming webhook delivery.
  *
  * Recomputes `sha256=<hmac>` over the **raw request body bytes** (sign exactly
@@ -98,12 +120,7 @@ export async function verifyWebhookSignature(input: {
   /** Your webhook signing secret (`whsec_…`). */
   secret: string;
 }): Promise<boolean> {
-  const subtle = globalThis.crypto?.subtle;
-  if (!subtle) {
-    throw new Error(
-      "verifyWebhookSignature requires Web Crypto (globalThis.crypto.subtle) — available in Node 18+, browsers, and edge runtimes.",
-    );
-  }
+  const subtle = await resolveSubtle();
   const enc = new TextEncoder();
   // Normalize to a fresh ArrayBuffer-backed view (a passed-in Uint8Array may be
   // typed over ArrayBufferLike / SharedArrayBuffer, which Web Crypto rejects).

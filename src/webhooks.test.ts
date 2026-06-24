@@ -112,6 +112,18 @@ describe("verifyWebhookSignature", () => {
     expect(await verifyWebhookSignature({ payload: body, signature: "", secret })).toBe(false);
     expect(await verifyWebhookSignature({ payload: body, signature: "garbage", secret })).toBe(false);
   });
+
+  it("falls back to node:crypto when globalThis.crypto is absent (Node 18)", async () => {
+    const sig = await sign(secret, body); // sign while the global is still present
+    const original = globalThis.crypto;
+    // Simulate stock Node 18.x, where the WebCrypto global is flag-gated.
+    Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
+    try {
+      expect(await verifyWebhookSignature({ payload: body, signature: sig, secret })).toBe(true);
+    } finally {
+      Object.defineProperty(globalThis, "crypto", { value: original, configurable: true });
+    }
+  });
 });
 
 describe("parseWebhookEvent", () => {
