@@ -1,3 +1,4 @@
+import { webcrypto } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { Webhooks, verifyWebhookSignature, parseWebhookEvent } from "./webhooks.js";
 import type { HttpClient } from "./http.js";
@@ -64,17 +65,19 @@ describe("Webhooks", () => {
 });
 
 // A signature produced by the same HMAC the server uses, so the verifier
-// has a real fixture to check against.
+// has a real fixture to check against. Uses node:crypto.webcrypto (not the
+// gated `globalThis.crypto`) so the suite runs on stock Node 18 — and so the
+// "global absent" test below can null the global without breaking signing.
 async function sign(secret: string, body: string): Promise<string> {
   const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
+  const key = await webcrypto.subtle.importKey(
     "raw",
     enc.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
-  const mac = await crypto.subtle.sign("HMAC", key, enc.encode(body));
+  const mac = await webcrypto.subtle.sign("HMAC", key, enc.encode(body));
   const hex = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return `sha256=${hex}`;
 }
@@ -114,7 +117,7 @@ describe("verifyWebhookSignature", () => {
   });
 
   it("falls back to node:crypto when globalThis.crypto is absent (Node 18)", async () => {
-    const sig = await sign(secret, body); // sign while the global is still present
+    const sig = await sign(secret, body); // sign() uses node:crypto, unaffected by the global
     const original = globalThis.crypto;
     // Simulate stock Node 18.x, where the WebCrypto global is flag-gated.
     Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
