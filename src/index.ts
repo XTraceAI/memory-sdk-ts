@@ -1,7 +1,12 @@
 export { MemoryClient } from "./client.js";
 export type { MemoryClientOptions } from "./client.js";
 
-export { Memories, renderMemoriesPrompt, DEFAULT_PROMPT_TEMPLATE } from "./memories.js";
+export {
+  Memories,
+  renderMemoriesPrompt,
+  renderDirectivesPrompt,
+  DEFAULT_PROMPT_TEMPLATE,
+} from "./memories.js";
 export type { IngestOptions, RequestContext } from "./memories.js";
 
 export { Groups } from "./groups.js";
@@ -25,9 +30,14 @@ export {
 } from "./errors.js";
 
 export type {
+  ActionContext,
   ApiErrorBody,
   ArtifactDetails,
   ArtifactMemory,
+  DirectiveDetails,
+  DirectiveListEnvelope,
+  DirectiveMemory,
+  DirectiveType,
   EpisodeDetails,
   EpisodeMemory,
   FactDetails,
@@ -50,6 +60,7 @@ export type {
   MemoryType,
   Message,
   PromptTemplate,
+  RecallDirectivesParams,
   RecallParams,
   RecallResult,
   RecallScopeStat,

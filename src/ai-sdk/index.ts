@@ -20,3 +20,6 @@ export type { CreateXtraceMemoryOptions } from "./provider.js";
 
 export { memoryTools } from "./tools.js";
 export type { MemoryToolsScope, MemoryToolsOptions } from "./tools.js";
+
+export { withDirectiveRecall, directiveContextForToolCall } from "./directives.js";
+export type { DirectiveRecallScope, DirectiveRecallOptions } from "./directives.js";
