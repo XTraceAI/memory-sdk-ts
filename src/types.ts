@@ -207,6 +207,104 @@ export interface SearchRequest {
 }
 
 /**
+ * The in-flight tool call the agent is about to make — the firing signal for
+ * directive recall. The server extracts the greppable identifiers from
+ * `tool` / `args` / `output` and matches them against directives'
+ * `trigger_entities`. At a pre-tool-call moment the high-value signal is
+ * `tool` + `args` (the intended call); `output` is for firing off a result.
+ */
+export interface ActionContext {
+  /** Tool / MCP name about to run (e.g. `"Edit"`, `"linode_api"`). */
+  tool?: string;
+  /** Intended tool arguments (e.g. `{ file_path: "tool_loop.py" }`). */
+  args?: Record<string, unknown>;
+  /** Most-recent tool output, if firing after a call rather than before. */
+  output?: string;
+}
+
+/** A situated directive's subtype. */
+export type DirectiveType = "lesson" | "procedure";
+
+/**
+ * Per-row details for a recalled directive. `because` / `confidence` are
+ * populated only under `mode: "compose"` (the relevance gate ran); they are
+ * `null` under `mode: "retrieve"`.
+ */
+export interface DirectiveDetails {
+  /** `"lesson"` or `"procedure"`. */
+  fact_type: string | null;
+  /** The concrete file/symbol anchors this directive fires on. */
+  trigger_entities: string[];
+  /** The subset of `trigger_entities` the in-flight action actually matched. */
+  matched_on: string[];
+  /** Why the gate kept this directive for the task. Null under `retrieve`. */
+  because: string | null;
+  /** Gate confidence (0–1). Null under `retrieve`. */
+  confidence: number | null;
+  /** How many times this directive has been re-confirmed. */
+  observation_count: number | null;
+  last_confirmed_at: string | null;
+}
+
+/** A situated directive (lesson/procedure) recalled by the symbol tripwire. */
+export interface DirectiveMemory {
+  id: string;
+  object: "memory";
+  type: DirectiveType;
+  /** The directive statement, ready to inject. */
+  text: string;
+  user_id?: string | null;
+  agent_id?: string | null;
+  conv_id?: string | null;
+  app_id?: string | null;
+  group_ids: string[];
+  categories: string[];
+  /** Null — directives are precision-gated, not vector-scored. */
+  score: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+  details: DirectiveDetails;
+}
+
+/** Response of {@link Memories.recallDirectives}. */
+export interface DirectiveListEnvelope {
+  object?: "list";
+  /** 0–N high-precision directives, most-recent first. */
+  data: DirectiveMemory[];
+  /**
+   * Inject-ready markdown of the kept directives — populated only under
+   * `mode: "compose"`; `null` under `mode: "retrieve"`.
+   */
+  context?: string | null;
+}
+
+/**
+ * Parameters for {@link Memories.recallDirectives}. Directives fire on the
+ * symbols the agent is touching, so **`action` (with at least one of
+ * `tool`/`args`/`output`) OR `entities` is required** — the server returns
+ * `422` otherwise.
+ */
+export interface RecallDirectivesParams {
+  /** The in-flight tool call; identifiers extracted server-side. */
+  action?: ActionContext;
+  /** Pre-extracted identifiers to fire on (skips server-side extraction). */
+  entities?: string[];
+  /** The agent's current goal — fed to the relevance gate under `compose`. */
+  task?: string;
+  user_id?: string;
+  agent_id?: string;
+  app_id?: string;
+  group_ids?: string[];
+  /**
+   * `"retrieve"` (the SDK default here) is the deterministic stage-1 tripwire —
+   * fast (~0.1s), may over-fire. `"compose"` adds the stage-2 LLM relevance
+   * gate — precise, slower (~1s), and populates `because` / `confidence`.
+   */
+  mode?: SearchMode;
+  limit?: number;
+}
+
+/**
  * One scoped search whose results {@link Memories.recall} unions with the others.
  * Axes within a pool **AND** together (a normal scoped search); recall **unions**
  * the pools, dedupes, ranks, and renders one prompt.

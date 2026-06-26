@@ -1,6 +1,8 @@
 import type { HttpClient } from "./http.js";
 import { Jobs } from "./jobs.js";
 import type {
+  DirectiveListEnvelope,
+  DirectiveMemory,
   IngestJob,
   IngestRequest,
   GroupListEnvelope,
@@ -8,6 +10,7 @@ import type {
   ListQuery,
   Memory,
   PromptTemplate,
+  RecallDirectivesParams,
   RecallParams,
   RecallResult,
   RecallScopeStat,
@@ -170,6 +173,24 @@ export function renderMemoriesPrompt(
   return [t.header, ...sections].join("\n\n");
 }
 
+/**
+ * Render recalled directives into an inject-ready markdown block — deterministic,
+ * no LLM. One bullet per directive, tagged by type, with the gate's `because`
+ * appended when present. Returns `""` for an empty list. (Under `mode: "compose"`
+ * the server already returns this in `DirectiveListEnvelope.context`; use this
+ * when you recalled with `mode: "retrieve"` and want to render client-side.)
+ */
+export function renderDirectivesPrompt(directives: DirectiveMemory[]): string {
+  if (directives.length === 0) return "";
+  const lines = ["Relevant directives for what you're about to do:"];
+  for (const d of directives) {
+    const tag = (d.details?.fact_type ?? d.type).toUpperCase();
+    const why = d.details?.because ? ` — ${d.details.because}` : "";
+    lines.push(`- [${tag}] ${d.text}${why}`);
+  }
+  return lines.join("\n");
+}
+
 export interface IngestOptions {
   /**
    * If true, hold the connection up to 30s server-side and return the full
@@ -243,6 +264,52 @@ export class Memories {
       signal: context.signal,
       requestId: context.requestId,
     });
+    return response;
+  }
+
+  /**
+   * Recall situated **directives** (lessons / procedures) for what the agent is
+   * touching right now — the symbol tripwire. The pre-tool-call read: pass the
+   * in-flight `action` (the tool + args you're about to run) **or** pre-extracted
+   * `entities`, and the server fires the directives whose `trigger_entities`
+   * overlap. Returns 0–N high-precision directives (most-recent first).
+   *
+   * `mode` defaults to `"retrieve"` here (the fast, deterministic stage-1 lane —
+   * right for a per-tool-call hook); pass `"compose"` for the LLM relevance gate
+   * (precise, ~1s, and fills `because` / `confidence`).
+   *
+   * Throws before the request if neither a non-empty `action` nor `entities` is
+   * given — the server requires a firing signal for the directive corpus (422).
+   */
+  async recallDirectives(
+    params: RecallDirectivesParams,
+    context: RequestContext = {},
+  ): Promise<DirectiveListEnvelope> {
+    const { action, entities, task, mode, limit, ...scope } = params;
+    const hasAction =
+      !!action && [action.tool, action.args, action.output].some((v) => v != null);
+    const hasEntities = Array.isArray(entities) && entities.length > 0;
+    if (!hasAction && !hasEntities) {
+      throw new TypeError(
+        "recallDirectives requires `action` (the in-flight tool call, with at least " +
+          "tool/args/output) or `entities` — directives fire on the symbols the agent " +
+          "is touching, not a query.",
+      );
+    }
+    const body = {
+      ...scope,
+      include: ["lesson", "procedure"],
+      mode: mode ?? "retrieve",
+      ...(hasAction ? { action } : {}),
+      ...(hasEntities ? { entities } : {}),
+      ...(task ? { task } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    };
+    const { body: response } = await this.http.request<DirectiveListEnvelope>(
+      "POST",
+      "/v1/memories/search",
+      { body, signal: context.signal, requestId: context.requestId },
+    );
     return response;
   }
 
