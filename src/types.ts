@@ -55,7 +55,10 @@ export interface EpisodeDetails {
   artifact_ids: string[];
 }
 
-interface MemoryBase<T extends MemoryType, D> {
+// `T` is widened past `MemoryType` so the lesson/procedure rows returned by the
+// trigger endpoint can reuse this shape without joining the `Memory` union (they
+// come back only from `POST /v1/memories/trigger`, never from search/list).
+interface MemoryBase<T extends string, D> {
   id: string;
   object: "memory";
   type: T;
@@ -204,6 +207,97 @@ export interface SearchRequest {
    * the top-level fields above.
    */
   filters?: Filter;
+}
+
+// ── Trigger (pre-tool-call recall) ──────────────────────────────────────────
+// `POST /v1/memories/trigger` recalls the `lesson` / `procedure` insights past
+// sessions recorded about the symbols an in-flight tool call touches. Fired
+// before (or just after) a tool runs; advisory, not a mandate. Unlike search it
+// takes no query and is not metered against the monthly quota.
+
+/** The two kinds of insight the trigger endpoint recalls. */
+export type LessonProcedureType = "lesson" | "procedure";
+
+/**
+ * Per-row detail for a `lesson` / `procedure` insight. `because` / `confidence`
+ * are filled only under `mode: "compose"` (the relevance gate ran); under
+ * `retrieve` they are null (deterministic symbol-tripwire only).
+ */
+export interface LessonProcedureDetails {
+  fact_type: LessonProcedureType | null;
+  /** The concrete file/symbol anchors this insight fires on. */
+  trigger_entities: string[];
+  /** The subset of `trigger_entities` the in-flight action actually matched. */
+  matched_on: string[];
+  /** Why the gate kept this insight for the current task. Null under `retrieve`. */
+  because: string | null;
+  /** Gate confidence (0–1). Null under `retrieve`. */
+  confidence: number | null;
+  /** How many times this insight has been re-confirmed. */
+  observation_count: number | null;
+  last_confirmed_at: string | null;
+}
+
+export type LessonMemory = MemoryBase<"lesson", LessonProcedureDetails>;
+export type ProcedureMemory = MemoryBase<"procedure", LessonProcedureDetails>;
+
+/**
+ * The in-flight tool call the agent is touching — the firing signal for recall.
+ * The server extracts greppable identifiers from `tool` / `args` / `output` and
+ * matches them exactly against insights' trigger anchors. At a pre-tool-call
+ * hook the high-value signal is `tool` + `args`; `output` is for firing on a
+ * just-returned result.
+ */
+export interface ActionContext {
+  /** Tool / MCP name about to run (e.g. `"Edit"`, `"linode_api"`). */
+  tool?: string;
+  /** Intended tool arguments (e.g. `{ file_path: "tool_loop.py" }`). */
+  args?: Record<string, unknown>;
+  /** Most-recent tool output, if firing post-call. */
+  output?: string;
+}
+
+export interface TriggerRequest {
+  /**
+   * The in-flight tool call to fire on — the server greps identifiers out of
+   * `tool` / `args` / `output`. Supply this or `entities`.
+   */
+  action?: ActionContext;
+  /**
+   * Escape hatch: pre-extracted identifiers to fire on, bypassing server-side
+   * extraction from `action`. Use when the client already knows the exact
+   * symbols the agent is touching.
+   */
+  entities?: string[];
+  /** Which corpora to recall. Defaults server-side to both. */
+  include?: LessonProcedureType[];
+  /**
+   * The agent's current goal, in one line (≤2000 chars). Fed to the relevance
+   * gate under `mode: "compose"` so it keeps only insights that help THIS task.
+   */
+  task?: string;
+  /** Pipeline depth. Defaults server-side to `"compose"`. */
+  mode?: SearchMode;
+  user_id?: string;
+  group_ids?: string[];
+  agent_id?: string;
+  app_id?: string;
+}
+
+/**
+ * `POST /v1/memories/trigger` response. `data` carries the matched
+ * `lesson` / `procedure` rows (`score` is null — precision-gated, not
+ * vector-scored). Under `mode: "compose"` an assembled markdown block lands in
+ * `context`; under `retrieve` `context` is null. `stage_timings` is always `{}`
+ * and `context_selection_applied` always false for this endpoint.
+ */
+export interface TriggerResponse {
+  object: "search";
+  mode: SearchMode;
+  data: Array<LessonMemory | ProcedureMemory>;
+  context: string | null;
+  stage_timings: Record<string, number>;
+  context_selection_applied: boolean;
 }
 
 /**

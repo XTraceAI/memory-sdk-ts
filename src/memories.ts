@@ -1,19 +1,26 @@
 import type { HttpClient } from "./http.js";
 import { Jobs } from "./jobs.js";
 import type {
+  ActionContext,
   IngestJob,
   IngestRequest,
   GroupListEnvelope,
+  LessonMemory,
+  LessonProcedureType,
   ListEnvelope,
   ListQuery,
   Memory,
+  ProcedureMemory,
   PromptTemplate,
   RecallParams,
   RecallResult,
   RecallScopeStat,
   ScopePool,
   SearchListEnvelope,
+  SearchMode,
   SearchRequest,
+  TriggerRequest,
+  TriggerResponse,
 } from "./types.js";
 
 /**
@@ -170,6 +177,26 @@ export function renderMemoriesPrompt(
   return [t.header, ...sections].join("\n\n");
 }
 
+/**
+ * Render recalled `lesson` / `procedure` rows into a single inject-ready block —
+ * deterministic, no LLM. Used for `mode: "retrieve"` (which returns no
+ * server-assembled `context`) and as the default for `preToolHook`'s render
+ * override. Under `compose`, prefer the server's `context` string, which is
+ * assembled the same way with the gate's `because` rationale attached.
+ */
+export function renderLessonProcedurePrompt(
+  rows: Array<LessonMemory | ProcedureMemory>,
+): string {
+  if (rows.length === 0) return "";
+  const lines = ["Relevant lessons & procedures:"];
+  for (const r of rows) {
+    const tag = (r.details.fact_type ?? r.type).toUpperCase();
+    const why = r.details.because;
+    lines.push(`- **[${tag}]** ${r.text}${why ? ` — ${why}` : ""}`);
+  }
+  return lines.join("\n");
+}
+
 export interface IngestOptions {
   /**
    * If true, hold the connection up to 30s server-side and return the full
@@ -184,6 +211,41 @@ export interface IngestOptions {
 export interface RequestContext {
   signal?: AbortSignal;
   requestId?: string;
+}
+
+export interface PreToolHookOptions extends RequestContext {
+  /** Scope — at least one axis required (validated client-side). */
+  user_id?: string;
+  group_ids?: string[];
+  agent_id?: string;
+  app_id?: string;
+  /** Current goal; gates recalled insights under `compose`. */
+  task?: string;
+  /** Pipeline depth. Defaults to `"compose"` (relevance-gated + assembled block). */
+  mode?: SearchMode;
+  /** Restrict the corpora recalled. Defaults to both `lesson` + `procedure`. */
+  include?: LessonProcedureType[];
+  /**
+   * Hard client-side timeout in ms. Opt-in: the server already bounds recall to
+   * ~5s and fails soft, so leave this unset unless you need a tighter cap. A
+   * value below the server budget can clip a normal `compose` call.
+   */
+  timeoutMs?: number;
+  /** Override the `retrieve`-mode block renderer (unused under `compose`). */
+  render?: (rows: Array<LessonMemory | ProcedureMemory>) => string;
+}
+
+export interface PreToolHookResult {
+  /**
+   * Inject-ready block. The server's assembled `context` under `compose`; the
+   * client-rendered block under `retrieve`. Empty string when nothing matched
+   * or the call degraded.
+   */
+  context: string;
+  /** The raw matched `lesson` / `procedure` rows. */
+  memories: Array<LessonMemory | ProcedureMemory>;
+  /** True when the call failed soft (network error / timeout) and returned empty. */
+  degraded: boolean;
 }
 
 export class Memories {
@@ -244,6 +306,116 @@ export class Memories {
       requestId: context.requestId,
     });
     return response;
+  }
+
+  /**
+   * Procedural-memory recall for a pre-tool-call hook (`POST /v1/memories/trigger`).
+   *
+   * Fires the symbol tripwire on the in-flight `action` (or explicit `entities`)
+   * and returns the `lesson` / `procedure` insights past sessions recorded about
+   * those symbols — advisory, not a mandate. No query, and **not** metered
+   * against the monthly quota, so it's safe to call before every tool use.
+   * `mode: "compose"` (default) additionally runs an LLM relevance gate over
+   * `task` and assembles a markdown block into `context`; `retrieve` returns the
+   * raw matched rows and leaves `context` null.
+   *
+   * Throws on HTTP errors like {@link search}. For a hot-path hook that must
+   * never block the agent's tool loop, use {@link preToolHook}, which fails soft.
+   */
+  async trigger(body: TriggerRequest, context: RequestContext = {}): Promise<TriggerResponse> {
+    const { body: response } = await this.http.request<TriggerResponse>("POST", "/v1/memories/trigger", {
+      body,
+      signal: context.signal,
+      requestId: context.requestId,
+    });
+    return response;
+  }
+
+  /**
+   * Fail-soft sugar over {@link trigger} built for a pre-tool-call hook.
+   *
+   * Pass the tool call the agent is about to make (`{ tool, args, output? }`) or
+   * pre-extracted `{ entities }`, plus at least one scope axis. Returns the
+   * inject-ready `context` block (server-assembled under `compose`,
+   * client-rendered under `retrieve`) alongside the raw rows.
+   *
+   * Unlike {@link trigger}, this **never throws on a network error or timeout** —
+   * it returns `{ context: "", memories: [], degraded: true }` so a recall
+   * hiccup can't stall the tool loop (the server already fails soft too). It
+   * *does* throw synchronously on misconfiguration — no scope axis, or no firing
+   * signal — since those are caller bugs, not transient failures.
+   *
+   * @example
+   * const { context } = await client.memories.preToolHook(
+   *   { tool: "Edit", args: { file_path: "tool_loop.py" } },
+   *   { user_id: "alice", task: "fix finalize-on-abort" },
+   * );
+   * if (context) systemPrompt += `\n\n${context}`;
+   */
+  async preToolHook(
+    signal: ActionContext | { entities: string[] },
+    opts: PreToolHookOptions,
+  ): Promise<PreToolHookResult> {
+    const mode = opts.mode ?? "compose";
+
+    const isEntities =
+      "entities" in signal && Array.isArray((signal as { entities: unknown }).entities);
+    const action = isEntities ? undefined : (signal as ActionContext);
+    const entities = isEntities ? (signal as { entities: string[] }).entities : undefined;
+
+    // Fail LOUD on caller bugs, before any network work — an empty result here
+    // would silently mask a missing scope or firing signal.
+    if (!opts.user_id && !(opts.group_ids && opts.group_ids.length > 0) && !opts.agent_id && !opts.app_id) {
+      throw new Error(
+        "preToolHook(): at least one scope axis (user_id, group_ids, agent_id, or app_id) is required",
+      );
+    }
+    const hasActionSignal =
+      !!action && (action.tool != null || action.args != null || action.output != null);
+    if (!hasActionSignal && !(entities && entities.length > 0)) {
+      throw new Error(
+        "preToolHook(): pass an `action` (with at least tool/args/output) or non-empty " +
+          "`entities` — recall fires on the symbols the agent is touching, not a query",
+      );
+    }
+
+    const body: TriggerRequest = {
+      ...(action ? { action } : {}),
+      ...(entities ? { entities } : {}),
+      mode,
+      include: opts.include,
+      task: opts.task,
+      user_id: opts.user_id,
+      group_ids: opts.group_ids,
+      agent_id: opts.agent_id,
+      app_id: opts.app_id,
+    };
+
+    // Combine an optional client-side timeout with the caller's own signal so
+    // either aborts the request; both resolve to a soft, empty result below.
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (opts.timeoutMs != null) timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+    if (opts.signal) {
+      if (opts.signal.aborted) controller.abort();
+      else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    }
+
+    try {
+      const resp = await this.trigger(body, { signal: controller.signal, requestId: opts.requestId });
+      const rows = resp.data ?? [];
+      const context =
+        mode === "compose"
+          ? (resp.context ?? "")
+          : (opts.render ?? renderLessonProcedurePrompt)(rows);
+      return { context, memories: rows, degraded: false };
+    } catch {
+      // Any network error / timeout / abort degrades to empty — the hook must
+      // not block the agent's tool call.
+      return { context: "", memories: [], degraded: true };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**
