@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Memories, renderLessonProcedurePrompt } from "./memories.js";
 import type { HttpClient } from "./http.js";
 import type { LessonMemory, ProcedureMemory, TriggerRequest, TriggerResponse } from "./types.js";
@@ -158,6 +158,23 @@ describe("Memories.preToolHook", () => {
       new Memories(http).preToolHook({ entities: [] }, { user_id: "alice" }),
     ).rejects.toThrow(/action.*or.*entities/s);
     expect(calls).toHaveLength(0);
+  });
+
+  it("removes the abort listener from a long-lived caller signal after a normal completion", async () => {
+    const { http } = fakeHttp({ onTrigger: () => ({ data: [] }) });
+    const ac = new AbortController();
+    const add = vi.spyOn(ac.signal, "addEventListener");
+    const remove = vi.spyOn(ac.signal, "removeEventListener");
+    await new Memories(http).preToolHook(
+      { tool: "Edit", args: {} },
+      { user_id: "alice", signal: ac.signal, timeoutMs: 5000 },
+    );
+    // The listener added for the caller's signal must be torn down so a signal
+    // reused across a busy tool loop doesn't accumulate one dangling listener
+    // per call.
+    expect(add).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(ac.signal.aborted).toBe(false);
   });
 
   it("degrades (does not throw) when the caller's signal is already aborted", async () => {

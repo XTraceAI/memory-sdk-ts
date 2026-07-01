@@ -394,11 +394,20 @@ export class Memories {
     // Combine an optional client-side timeout with the caller's own signal so
     // either aborts the request; both resolve to a soft, empty result below.
     const controller = new AbortController();
+    const onAbort = () => controller.abort();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    if (opts.timeoutMs != null) timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+    let listenedSignal: AbortSignal | undefined;
+    if (opts.timeoutMs != null) timer = setTimeout(onAbort, opts.timeoutMs);
     if (opts.signal) {
       if (opts.signal.aborted) controller.abort();
-      else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+      else {
+        // Track the signal we attach to so the listener is removed in `finally`.
+        // `{ once: true }` alone leaks here: a normally-completing call never
+        // fires `abort`, so on a long-lived caller signal reused across a busy
+        // tool loop each preToolHook would leave a dangling listener.
+        opts.signal.addEventListener("abort", onAbort, { once: true });
+        listenedSignal = opts.signal;
+      }
     }
 
     try {
@@ -415,6 +424,7 @@ export class Memories {
       return { context: "", memories: [], degraded: true };
     } finally {
       if (timer) clearTimeout(timer);
+      listenedSignal?.removeEventListener("abort", onAbort);
     }
   }
 
