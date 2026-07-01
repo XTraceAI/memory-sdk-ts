@@ -1,8 +1,18 @@
 export { MemoryClient } from "./client.js";
 export type { MemoryClientOptions } from "./client.js";
 
-export { Memories, renderMemoriesPrompt, DEFAULT_PROMPT_TEMPLATE } from "./memories.js";
-export type { IngestOptions, RequestContext } from "./memories.js";
+export {
+  Memories,
+  renderMemoriesPrompt,
+  renderLessonProcedurePrompt,
+  DEFAULT_PROMPT_TEMPLATE,
+} from "./memories.js";
+export type {
+  IngestOptions,
+  PreToolHookOptions,
+  PreToolHookResult,
+  RequestContext,
+} from "./memories.js";
 
 export { Groups } from "./groups.js";
 
@@ -25,6 +35,7 @@ export {
 } from "./errors.js";
 
 export type {
+  ActionContext,
   ApiErrorBody,
   ArtifactDetails,
   ArtifactMemory,
@@ -33,6 +44,10 @@ export type {
   FactDetails,
   FactMemory,
   Filter,
+  LessonMemory,
+  LessonProcedureDetails,
+  LessonProcedureType,
+  ProcedureMemory,
   Group,
   GroupCreateRequest,
   GroupListEnvelope,
@@ -58,6 +73,8 @@ export type {
   SearchListEnvelope,
   SearchMode,
   SearchRequest,
+  TriggerRequest,
+  TriggerResponse,
   WebhookConfig,
   WebhookConfigRequest,
   WebhookCompletedEvent,
