@@ -48,6 +48,7 @@
     "test:watch": "vitest",
     "gen:types": "openapi-typescript spec/memory.json -o src/generated/types.ts",
     "smoke": "tsx examples/smoke.ts",
+    "smoke:groups": "tsx examples/groups-smoke.ts",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build"
   },
   "devDependencies": {
