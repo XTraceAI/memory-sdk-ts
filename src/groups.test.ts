@@ -42,6 +42,18 @@ describe("Groups", () => {
     expect(g.id).toBe("grp_x");
   });
 
+  it("create without a prompt registers a catch-all group (prompt: null)", async () => {
+    const { http, calls } = fakeHttp(() => grp("grp_c", { name: "Everything", prompt: null }));
+    const g = await new Groups(http).create({ name: "Everything" });
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      path: "/v1/groups",
+      body: { name: "Everything" },
+    });
+    expect(calls[0]!.body).not.toHaveProperty("prompt");
+    expect(g.prompt).toBeNull();
+  });
+
   it("list unwraps the envelope to Group[]", async () => {
     const { http, calls } = fakeHttp(() => ({ object: "list", data: [grp("grp_a"), grp("grp_b")] }));
     const gs = await new Groups(http).list();

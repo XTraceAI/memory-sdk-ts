@@ -306,14 +306,24 @@ export interface PromptTemplate {
 
 export type GroupStatus = "active" | "archived";
 
-/** A registered group: a tagging target with a prompt describing what belongs to it. */
+/**
+ * A registered group: a tagging target. A prompted group receives the
+ * extracted memories the ingest classifier matches against its `prompt`; a
+ * prompt-less group (`prompt: null`) is a catch-all that receives every
+ * extracted memory judged shareable. Memories the classifier judges personal
+ * are never group-tagged, catch-all or not.
+ */
 export interface Group {
   object: "group";
   /** Server-generated handle, `grp_<32hex>`. */
   id: string;
   name: string;
-  /** Describes when a memory belongs to this group — used by the ingest classifier. */
-  prompt: string;
+  /**
+   * Describes when a memory belongs to this group — used by the ingest
+   * classifier. `null` marks a catch-all group: every extracted memory the
+   * classifier judges shareable (not personal) is tagged with it.
+   */
+  prompt: string | null;
   status: GroupStatus;
   created_at: string;
   updated_at: string | null;
@@ -321,12 +331,23 @@ export interface Group {
 
 export interface GroupCreateRequest {
   name: string;
-  prompt: string;
+  /**
+   * Classifier criterion — describe *what* belongs in the group. Omit to
+   * create a catch-all group that is tagged on every extracted memory the
+   * classifier judges shareable (not personal), with no per-group matching.
+   * An empty string is rejected (422); only omission means catch-all.
+   */
+  prompt?: string;
 }
 
 /** Partial update. Any field omitted is left unchanged. `status: "archived"` archives the group. */
 export interface GroupUpdateRequest {
   name?: string;
+  /**
+   * New classifier prompt. Setting one on a catch-all group converts it to a
+   * prompted group going forward; a prompt can never be removed via update
+   * (empty string is a 422). Does not retroactively re-tag existing rows.
+   */
   prompt?: string;
   status?: GroupStatus;
 }

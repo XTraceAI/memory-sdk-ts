@@ -8,10 +8,13 @@ import type {
 } from "./types.js";
 
 /**
- * Group registry client (`/v1/groups`). A group is a tagging target with a
- * `prompt` describing what belongs to it; at ingest time the classifier tags
- * extracted memories with the registered groups they match. Register a group
- * here before passing its id in `IngestRequest.group_ids` or `recall`.
+ * Group registry client (`/v1/groups`). A group is a tagging target: at
+ * ingest time the classifier tags extracted memories with the registered
+ * groups whose `prompt` they match. A group created without a prompt is a
+ * catch-all — it receives every extracted memory the classifier judges
+ * shareable. Memories judged personal are never group-tagged, catch-all or
+ * not. Register a group here before passing its id in
+ * `IngestRequest.group_ids` or `recall`.
  */
 export class Groups {
   constructor(private readonly http: HttpClient) {}
