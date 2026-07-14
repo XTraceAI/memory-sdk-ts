@@ -25,9 +25,13 @@ export {
 } from "./errors.js";
 
 export type {
+  ActionContext,
   ApiErrorBody,
   ArtifactDetails,
   ArtifactMemory,
+  DirectiveDetails,
+  DirectiveMemory,
+  DirectiveType,
   EpisodeDetails,
   EpisodeMemory,
   FactDetails,
@@ -58,6 +62,7 @@ export type {
   SearchListEnvelope,
   SearchMode,
   SearchRequest,
+  TriggerRequest,
   WebhookConfig,
   WebhookConfigRequest,
   WebhookCompletedEvent,

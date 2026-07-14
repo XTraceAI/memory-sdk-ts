@@ -12,29 +12,23 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List memories (cursor-paginated, flat-equality filters)
+         * List memories
          * @description List memories with flat-equality filters and cursor pagination.
          */
         get: operations["list_memories_v1_memories_get"];
         put?: never;
         /**
-         * Ingest memories (async)
-         * @description Async ingest. Returns ``202 + job_id`` by default.
+         * Ingest memories
+         * @description Async ingest. Returns ``202 + job_id`` by default; the extraction
+         *     runs in the background and the caller polls
+         *     ``GET /v1/memories/jobs/{job_id}``.
          *
-         *     With ``?wait=true`` the server holds the connection up to
-         *     ``Settings.MEMORY_INGEST_WAIT_TIMEOUT_SECONDS`` (30s default). If
-         *     extraction completes within that window, the response is
-         *     ``200 OK`` with the terminal job inline. If the deadline elapses
-         *     first, the response falls back to ``202 Accepted`` with
-         *     ``status: "pending"`` and the caller resumes the polling pattern
-         *     against ``GET /v1/memories/jobs/{job_id}``.
-         *
-         *     The extraction task is spawned via ``asyncio.create_task`` and
-         *     awaited via ``asyncio.wait(timeout=…, return_when=FIRST_COMPLETED)``
-         *     — ``wait`` doesn't cancel pending tasks on timeout, so the
-         *     background extraction continues regardless of whether the wait
-         *     window elapsed. Strong reference held in :data:`_pending_jobs`
-         *     keeps the task from being garbage-collected.
+         *     With ``?wait=true`` the server holds the connection up to ~30
+         *     seconds waiting for extraction to terminate. If it finishes in
+         *     time, the response is ``200 OK`` with the terminal job inline
+         *     (``status: "succeeded"`` or ``"failed"``). If the wait window
+         *     elapses first, the response falls back to ``202 + pending`` and
+         *     the caller resumes the normal polling pattern.
          */
         post: operations["ingest_memories_v1_memories_post"];
         delete?: never;
@@ -51,17 +45,15 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Poll an ingest job
+         * Poll ingest job
          * @description Return the current state of an ingest job.
          *
-         *     Terminal states (``succeeded`` / ``failed``) are persisted in
-         *     DynamoDB and remain queryable indefinitely under the current
-         *     deployment (the shared usage table has no table-level TTL
-         *     enabled). ``result.memories_created`` and
-         *     ``result.memories_updated`` carry thin :class:`MemoryRef` entries
-         *     (``{id, type, text}``) — fetch ``GET /v1/memories/{id}`` for the
-         *     full ``Memory`` shape. ``404 job_not_found`` still fires for
-         *     unknown ids and for ids that exist under a different org.
+         *     Terminal states (``succeeded`` / ``failed``) remain queryable
+         *     after the job completes. ``result.memories_created`` and
+         *     ``result.memories_updated`` carry thin references
+         *     (``{id, type, text}``); fetch ``GET /v1/memories/{id}`` for the
+         *     full row. Returns ``404 job_not_found`` for unknown ids or ids
+         *     belonging to a different org.
          */
         get: operations["get_ingest_job_v1_memories_jobs__job_id__get"];
         put?: never;
@@ -82,29 +74,77 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Vector + filter search
-         * @description Vector + filter search over the unified memory pool.
+         * Agentic memory search
+         * @description Agentic search over the memory pool.
          *
-         *     PR 4: org-wide vector search with cross-entity filtering. No
-         *     partition lookup, no precedence-based store routing — Qdrant's
-         *     indexed-payload intersection drives the candidate set, vector
-         *     similarity ranks within it. Filters are the standard DSL
-         *     (per-field exact equality, ``$in``/``$ne``/``$exists``/``$gte``/
-         *     ``$lte``, ``AND``/``OR``/``NOT``); ``type`` (or
-         *     ``type: {$in: [...]}``) restricts which kb_types participate.
-         *     Default = all three (mixed-type results merged by raw cosine).
-         *
-         *     ``include`` opts into composed output:
-         *
-         *     - ``"full_content"`` — populate ``details.full_content`` on artifact
-         *       rows (no-op for facts/episodes).
-         *     - ``"context_prompt"`` — run xmem's retrieval-agent pipeline;
-         *       assembled markdown lands under ``extras.context_prompt``,
-         *       latency breakdown under ``extras.stage_timings``. The agent
-         *       pipeline is conv-scoped, so this path requires ``conv_id`` in
-         *       ``filters``.
+         *     Pipeline: per-corpus vector retrieval → (``mode=compose`` only)
+         *     LLM context selection. ``data: list[Memory]`` is always returned;
+         *     ``mode=compose`` additionally assembles a markdown block into
+         *     ``context: str``, while ``mode=retrieve`` stops after retrieval
+         *     and leaves ``context`` null. Scope is enforced server-side from the
+         *     request's scope axes (``user_id`` / ``group_ids`` / ``agent_id`` /
+         *     ``app_id``); no caller-supplied filter DSL.
          */
         post: operations["search_memory_v1_memories_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/trigger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Procedural-memory recall (pre-tool-call hook)
+         * @description Procedural-memory recall for a pre-tool-call hook.
+         *
+         *     Fires the symbol tripwire on the in-flight ``action`` (or explicit ``entities``)
+         *     and returns the ``lesson``/``procedure`` insights past sessions recorded about
+         *     those symbols — advisory, not a mandate. ``data: list[Memory]`` carries the matched
+         *     rows (``type: "lesson" | "procedure"``); ``mode=compose`` additionally runs an LLM
+         *     relevance gate over ``task`` and assembles a markdown block into ``context``, while
+         *     ``mode=retrieve`` returns the raw matched rows and leaves ``context`` null. Scope is
+         *     enforced server-side from the request's scope axes (``user_id`` / ``group_ids`` /
+         *     ``agent_id`` / ``app_id``).
+         *
+         *     Unlike ``POST /v1/memories/search``, this endpoint is **not** metered against the
+         *     monthly quota — the hook is meant to be called freely before every tool use.
+         */
+        post: operations["trigger_memory_v1_memories_trigger_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/memories/{memory_id}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get revision chain
+         * @description Return the revision chain for a memory.
+         *
+         *     Facts → supersede chain (oldest → newest).
+         *     Artifacts → version chain (v1 → vN).
+         *     Episodes → single-element list (episodes have no revisions today).
+         *
+         *     Full chain in one response. ``has_more`` is always ``false``;
+         *     cursor envelope kept for shape consistency.
+         */
+        get: operations["get_memory_revisions_v1_memories__memory_id__revisions_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -119,7 +159,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get one memory by id
+         * Get memory
          * @description Get one memory by id. Works for facts, artifacts, episodes.
          *     Always returns the full representation — artifacts include
          *     ``details.full_content``.
@@ -128,37 +168,249 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Delete a memory
-         * @description Delete a memory.
+         * Delete memory
+         * @description Hard-delete a memory — fact, artifact, or episode.
          *
-         *     Facts → soft delete (``tag2`` flipped to retracted; the row stays
-         *     so supersede walkers can resolve it).
-         *     Artifacts / episodes → hard delete (Qdrant point removed).
+         *     Removes the record outright (no soft-delete / tombstone). A
+         *     deleted fact disappears from supersede chains; the revision walker
+         *     (``GET /{id}/revisions``) tolerates the missing node and simply
+         *     stops there. Idempotent: the first delete returns 204, subsequent
+         *     deletes return 404 (the record is gone, so the existence check
+         *     below fails).
          */
         delete: operations["delete_memory_v1_memories__memory_id__delete"];
         options?: never;
         head?: never;
         /**
-         * Update a memory's text and/or metadata
-         * @description Update text and/or metadata.
+         * Update memory group_ids
+         * @description Add or remove ``group_ids`` on a single memory — the sharing
+         *     axis. Group tags control who can reach a row via
+         *     ``filters: {group_ids: <id>}`` on search / list, so this is how a
+         *     memory becomes shared (or un-shared) after ingest.
          *
-         *     - ``text`` change → supersede (create a new ACTIVE fact pointing
-         *       back at the old one via ``supersedes``); fact-only operation.
-         *     - ``metadata`` change → merge onto the existing payload in place
-         *       (works for any type).
-         *     - Both → text supersede; the new revision carries the merged
-         *       metadata. The old revision keeps its original metadata.
-         *
-         *     Trying to set an entity id / ``type`` / ``created_at`` via
-         *     ``metadata`` surfaces ``422 immutable_field``.
+         *     Scope is group tags only: ``text`` and the entity ids
+         *     (``user_id`` / ``agent_id`` / ``conv_id`` / ``app_id``) are
+         *     immutable post-ingest and are not editable here. The operation is
+         *     set-based and idempotent — re-sending the same patch is a no-op and
+         *     skips the write entirely. See :class:`MemoryGroupPatchRequest` for
+         *     the full contract.
          */
-        patch: operations["patch_memory_v1_memories__memory_id__patch"];
+        patch: operations["patch_memory_group_ids_v1_memories__memory_id__patch"];
+        trace?: never;
+    };
+    "/v1/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get usage
+         * @description Aggregate the org's memory usage for the current quota period — a
+         *     calendar month, or your billing period on plans that meter per billing
+         *     period — plus a per-day breakdown if requested, plus an inline storage
+         *     snapshot.
+         *
+         *     - ``operations`` totals ``messages_ingested`` / ``searches`` /
+         *       ``requests`` across every API key for the period.
+         *     - ``quota.monthly`` pairs those totals against the plan caps
+         *       resolved from the org's subscription tier; ``limit: null`` means
+         *       the tier is uncapped (enterprise).
+         *     - ``quota.rate_limit_req_per_min`` is the per-API-key request
+         *       ceiling enforced across all memory endpoints.
+         */
+        get: operations["get_usage_v1_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List groups
+         * @description List groups for the calling org. Active-only by default.
+         */
+        get: operations["list_groups_v1_groups_get"];
+        put?: never;
+        /**
+         * Create group
+         * @description Register a new group on the org. Returns the persisted row
+         *     including the server-generated `id`.
+         */
+        post: operations["create_group_v1_groups_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/groups/{group_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get group */
+        get: operations["get_group_v1_groups__group_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Archive group
+         * @description Soft-delete: flips `status` to `archived`. The group row is
+         *     retained so memory rows tagged with this id remain searchable;
+         *     new ingests reject the id with `422 group_archived`. Restore by
+         *     `PATCH`ing `status` back to `active`. Idempotent.
+         */
+        delete: operations["archive_group_v1_groups__group_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update group
+         * @description Patch `name`, `prompt`, and/or `status`. Changing `prompt` does
+         *     not retroactively re-tag memory rows that were tagged under the
+         *     previous prompt.
+         */
+        patch: operations["update_group_v1_groups__group_id__patch"];
+        trace?: never;
+    };
+    "/v1/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get webhook config
+         * @description Read the org's current webhook config. The `secret` is masked —
+         *     the full value is only ever shown at create / rotate time.
+         */
+        get: operations["get_webhook_v1_webhooks_get"];
+        /**
+         * Set webhook config
+         * @description Create or replace the org's webhook config. Idempotent on `url` /
+         *     `events` / `enabled`. The full signing `secret` is returned here —
+         *     on first create, or whenever `rotate_secret=true`. Store it: `GET`
+         *     only ever returns it masked.
+         */
+        put: operations["put_webhook_v1_webhooks_put"];
+        post?: never;
+        /**
+         * Delete webhook config
+         * @description Remove the org's webhook config. Idempotent — returns `204`
+         *     whether or not a config existed. Stops all deliveries for the org.
+         */
+        delete: operations["delete_webhook_v1_webhooks_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * ActionContext
+         * @description The in-flight tool call the agent is touching — the firing signal for procedural
+         *     recall on ``POST /v1/memories/trigger``. The server extracts greppable identifiers
+         *     from ``tool`` / ``args`` / ``output`` and matches them
+         *     exactly against directives' ``trigger_entities``. At a pre-tool-call hook the
+         *     high-value signal is ``tool`` + ``args`` (the intended call); ``output`` is for
+         *     firing off a just-returned result.
+         */
+        ActionContext: {
+            /**
+             * Tool
+             * @description Tool / MCP name about to run (e.g. "Edit", "linode_api").
+             */
+            tool?: string | null;
+            /**
+             * Args
+             * @description Intended tool arguments (e.g. {"file_path": "tool_loop.py"}).
+             */
+            args?: Record<string, never> | null;
+            /**
+             * Output
+             * @description Most-recent tool output, if firing post-call.
+             */
+            output?: string | null;
+        };
+        /**
+         * ByApiKeyEntry
+         * @description One row in the ``by_api_key[]`` breakdown.
+         */
+        ByApiKeyEntry: {
+            /** Api Key Hash */
+            api_key_hash: string;
+            /**
+             * First N
+             * @description Display prefix of the API key.
+             */
+            first_n?: string | null;
+            /**
+             * Name
+             * @description Human-readable label for the API key.
+             */
+            name?: string | null;
+            /**
+             * Messages Ingested
+             * @default 0
+             */
+            messages_ingested: number;
+            /**
+             * Searches
+             * @default 0
+             */
+            searches: number;
+            /**
+             * Requests
+             * @default 0
+             */
+            requests: number;
+            /**
+             * Last Used At
+             * @description Most recent ``updatedAt`` across this key's memory rollup rows for the period. ``None`` until the key has any usage.
+             */
+            last_used_at?: string | null;
+        };
+        /**
+         * DailyEntry
+         * @description One row in the ``daily[]`` array — chart x-axis points.
+         */
+        DailyEntry: {
+            /**
+             * Date
+             * @description Calendar day in ``YYYY-MM-DD`` form.
+             */
+            date: string;
+            /**
+             * Messages Ingested
+             * @default 0
+             */
+            messages_ingested: number;
+            /**
+             * Searches
+             * @default 0
+             */
+            searches: number;
+            /**
+             * Requests
+             * @default 0
+             */
+            requests: number;
+        };
         /**
          * ErrorDetail
          * @description Inner ``detail`` block on every non-2xx response raised by a
@@ -190,6 +442,128 @@ export interface components {
          */
         ErrorEnvelope: {
             detail: components["schemas"]["ErrorDetail"];
+        };
+        /**
+         * Group
+         * @description Wire shape of a group. ``id`` is the opaque handle that goes
+         *     into ``IngestRequest.group_ids`` and into search ``filters``.
+         */
+        Group: {
+            /**
+             * Object
+             * @description Constant discriminator for the resource type.
+             * @default group
+             * @constant
+             */
+            object: "group";
+            /**
+             * Id
+             * @description Stable group id of the form `grp_<32-hex-chars>`.
+             * @example grp_a1b2c3d4e5f6071829304a5b6c7d8e9f
+             */
+            id: string;
+            /**
+             * Name
+             * @description Human-readable label.
+             */
+            name: string;
+            /**
+             * Prompt
+             * @description Classifier criterion. Read by the ingest pipeline on every request that includes this group's id in `group_ids`. `null` marks a catch-all group: every extracted memory judged shareable (not personal) is tagged with it.
+             */
+            prompt?: string | null;
+            /**
+             * Status
+             * @description `active` groups are tagged on new ingests. `archived` groups still surface on search (rows tagged with the id stay reachable) but the ingest classifier rejects them.
+             * @enum {string}
+             */
+            status: "active" | "archived";
+            /**
+             * Created At
+             * Format: date-time
+             * @description ISO-8601 timestamp the group was registered.
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             * @description ISO-8601 timestamp of the most recent edit.
+             */
+            updated_at?: string | null;
+        };
+        /**
+         * GroupCreateRequest
+         * @description POST /v1/groups — register a new group.
+         *
+         *     The ``prompt`` is the instruction the ingest classifier reads on
+         *     every ingest to decide whether an extracted memory belongs in this
+         *     group. Write it as a description of *what* belongs, not a chat
+         *     instruction — e.g. "Facts about the Tokyo trip: dates, flights,
+         *     hotels, dietary preferences for Tokyo", not "tag this if you think
+         *     it should be tagged".
+         *
+         *     Omit ``prompt`` (or send ``null``) to create a catch-all group:
+         *     every extracted memory the classifier judges shareable (not
+         *     personal) is tagged with it — no per-group matching. Sending an
+         *     empty string is still a 422; only omission/null means catch-all,
+         *     so a blank field from a buggy client can't silently create one.
+         */
+        GroupCreateRequest: {
+            /**
+             * Name
+             * @description Human-readable label, shown in UI. Not used by the classifier.
+             * @example Tokyo trip 2026
+             */
+            name: string;
+            /**
+             * Prompt
+             * @description Free-text criterion the ingest classifier reads to decide whether an extracted memory belongs in this group. Describe what belongs, not how the classifier should behave. Omit (or send null) to make the group a catch-all: every extracted memory judged shareable (not personal) is tagged with it, with no per-group matching.
+             * @example Facts about the Tokyo trip in May 2026: dates, flights, hotels, restaurants, dietary preferences for this trip.
+             */
+            prompt?: string | null;
+        };
+        /**
+         * GroupListEnvelope
+         * @description Stripe-style list envelope. No cursor for now — group count is
+         *     bounded by ``Settings.MAX_GROUPS_PER_ORG`` (default 100) so a
+         *     single page is always sufficient.
+         */
+        GroupListEnvelope: {
+            /**
+             * Object
+             * @description Constant discriminator for the resource type.
+             * @default list
+             * @constant
+             */
+            object: "list";
+            /**
+             * Data
+             * @description All matching groups in the org.
+             */
+            data?: components["schemas"]["Group"][];
+        };
+        /**
+         * GroupUpdateRequest
+         * @description PATCH /v1/groups/{id} — partial update. Any field set to ``None``
+         *     is left unchanged. Editing ``prompt`` does NOT retroactively re-tag
+         *     existing memory rows.
+         */
+        GroupUpdateRequest: {
+            /**
+             * Name
+             * @description New name; leave null to keep existing.
+             */
+            name?: string | null;
+            /**
+             * Prompt
+             * @description New classifier prompt; leave null to keep existing. Does not retroactively re-tag existing memory rows. Setting a prompt on a catch-all group converts it to a prompted group going forward; a prompt can never be removed via PATCH (empty string is a 422).
+             */
+            prompt?: string | null;
+            /**
+             * Status
+             * @description Set to `"active"` to un-archive a previously-archived group. The normal way to archive is `DELETE /v1/groups/{id}`.
+             */
+            status?: ("active" | "archived") | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -269,22 +643,20 @@ export interface components {
          * IngestRequest
          * @description POST /v1/memories — async ingest from a message list.
          *
-         *     Required entities: ``user_id`` and ``conv_id``. ``user_id`` keys
-         *     xmem's per-user session-cache namespace (one ``MultiKBSet`` per
-         *     ``(org, user)``, so a user's facts accumulate in one place rather
-         *     than fragmenting per-conversation). ``conv_id`` anchors every
-         *     extracted memory to a conversation for replay, export, and bulk
-         *     retract. ``agent_id`` and ``app_id`` remain optional — set either,
-         *     both, or neither. There is no auto-default ``app_id`` rule.
+         *     Required entities: ``user_id`` and ``conv_id``. ``user_id`` scopes
+         *     a user's per-user memory namespace, so a user's facts accumulate in
+         *     one place rather than fragmenting per-conversation. ``conv_id``
+         *     anchors every extracted memory to a conversation for replay, export,
+         *     and bulk retract. ``agent_id`` and ``app_id`` remain optional — set
+         *     either, both, or neither. There is no auto-default ``app_id`` rule.
          *
          *     ``extract_artifacts`` opts in to the artifact-extraction stage
-         *     (off by default — most expensive stage and most callers don't
-         *     need it). Episodes are always extracted (conv_id is now
-         *     guaranteed). Facts are always extracted. (Per SoT decision #4.)
+         *     (off by default — the most expensive stage and most callers don't
+         *     need it). Episodes are always extracted (``conv_id`` is
+         *     guaranteed). Facts are always extracted.
          *
-         *     There is no client-facing pipeline hint: the server picks live
-         *     vs batch by ``len(messages)`` (SoT decision #4 + Settings
-         *     threshold).
+         *     There is no client-facing pipeline hint: the server selects its
+         *     extraction strategy automatically based on the number of messages.
          */
         IngestRequest: {
             /**
@@ -315,18 +687,34 @@ export interface components {
              */
             app_id?: string | null;
             /**
-             * Metadata
-             * @description Free-form customer metadata. Each key lands as its own indexed payload key, filterable on search. Reserved internal keys (`tag1`-`tag5`, `kb_type`, `org_id`, etc.) are stripped silently — see the `reserved_field` PATCH error for the list.
+             * Timestamp Format
+             * @description Optional `strptime` format string used to parse each message's `date` field into a real timestamp on the batch-extraction path (e.g. `"%Y-%m-%d %H:%M:%S"`). When omitted, or when a `date` value fails to parse, the turn keeps its raw date string with no parsed timestamp. Only consulted on the batch path (message count above the live threshold); the live path ignores it.
+             * @example %Y-%m-%d %H:%M:%S
              */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
+            timestamp_format?: string | null;
             /**
              * Extract Artifacts
-             * @description When true, run the artifact-extraction stage in addition to fact + episode extraction. Off by default — most expensive stage and most callers don't need it. Setting this routes the request through the batch extraction path regardless of message count.
+             * @description When true, extracted artifacts are also stored and returned as `artifact` memories, in addition to fact + episode extraction. Off by default — most expensive stage and most callers don't need it. Routing (live vs batch) is unaffected and still chosen by message count.
              * @default false
              */
             extract_artifacts: boolean;
+            /**
+             * Agentic
+             * @description When true, ingest through the agentic (task-aware) path: recall-first extraction + a Stage-2 noise filter + agentic artifact detection + a structured session gist. Intended for tool-using / coding-agent transcripts. Off by default (conversational extraction).
+             * @default false
+             */
+            agentic: boolean;
+            /**
+             * Namespace
+             * @description Namespace this session belongs to — the working context, e.g. a coding agent's repo, a support agent's customer account, an ops agent's service. Captured `lesson`/`procedure` directives are written under it, so recall with the same `namespace` (see `POST /v1/memories/trigger`) surfaces them there instead of in every context. Directives ingested without one are global. Unrelated to the tenancy axes (`user_id`/`agent_id`/`group_ids`).
+             * @example MemHub-Backend
+             */
+            namespace?: string | null;
+            /**
+             * Group Ids
+             * @description Optional list of group ids the client wants associated with this ingest. Each id must be a registered group on the org (see `POST /v1/groups`). Ids that are unknown or archived are dropped silently and echoed back in `result.ignored_group_ids` — a single stale id will not fail the ingest, since the chat path tolerates partial tagging better than a hard reject. After extraction, a classifier judges each memory personal-vs-shareable: personal memories are never group-tagged (they stay in the author's personal scope); shareable memories are tagged with every prompt-less (catch-all) group in the valid subset, plus whichever prompted groups the classifier matched. Tagged rows become reachable via `filters: {group_ids: <id>}` on search. The capped length is `MAX_GROUP_IDS_PER_INGEST`.
+             */
+            group_ids?: string[];
         };
         /**
          * IngestResult
@@ -368,6 +756,11 @@ export interface components {
             stage_timings?: {
                 [key: string]: number;
             };
+            /**
+             * Ignored Group Ids
+             * @description Subset of the request's `group_ids` that the server dropped because the id was unknown or archived. Empty on the common path. Lets clients self-correct stale caches without having to re-issue the ingest.
+             */
+            ignored_group_ids?: string[];
         };
         /**
          * ListEnvelope
@@ -406,9 +799,8 @@ export interface components {
          *     this shape. ``type`` is the discriminator; ``details`` is the
          *     type-specific extension.
          *
-         *     The mem0-parity invariant: ``text`` is always a short readable
-         *     preview, regardless of type (fact statement / artifact summary /
-         *     episode summary).
+         *     Invariant: ``text`` is always a short readable preview, regardless
+         *     of type (fact statement / artifact summary / episode summary).
          */
         Memory: {
             /**
@@ -425,10 +817,10 @@ export interface components {
             object: "memory";
             /**
              * Type
-             * @description Memory subtype. `fact` = a single semantic claim extracted from a turn; `artifact` = a structured object (code, doc, image) referenced by the conversation; `episode` = a session-scoped summary of a stretch of turns.
+             * @description Memory subtype. `fact` = a single semantic claim extracted from a turn; `artifact` = a structured object (code, doc, image) referenced by the conversation; `episode` = a session-scoped summary of a stretch of turns; `lesson` / `procedure` = a situated directive recalled by the symbol tripwire (see `DirectiveDetails`).
              * @enum {string}
              */
-            type: "fact" | "artifact" | "episode";
+            type: "fact" | "artifact" | "episode" | "lesson" | "procedure";
             /**
              * Text
              * @description Short readable preview. For facts: the claim statement. For artifacts: a summary or title (full body lives in `details.full_content`, opt-in via `include=full_content`). For episodes: a summary of the session.
@@ -455,15 +847,13 @@ export interface components {
              */
             app_id?: string | null;
             /**
-             * Metadata
-             * @description Free-form customer-supplied metadata that was on the row at write time. Each key here is independently indexed and filterable on search.
+             * Group Ids
+             * @description Group ids associated with this row — the sharing axis. Stamped at ingest time and editable afterward via `PATCH /v1/memories/{id}` (`add_group_ids` / `remove_group_ids`). Reachable as a filter axis via `filters: {group_ids: <id>}` or `{group_ids: {"$in": [<id>, ...]}}`.
              */
-            metadata?: {
-                [key: string]: unknown;
-            };
+            group_ids?: string[];
             /**
              * Categories
-             * @description Optional category labels from xmem's extraction pipeline.
+             * @description Optional category labels from the extraction pipeline.
              */
             categories?: string[];
             /**
@@ -480,29 +870,89 @@ export interface components {
             /**
              * Updated At
              * Format: date-time
-             * @description ISO-8601 timestamp of the last metadata patch / supersede.
+             * @description ISO-8601 timestamp of the last supersede / consolidation.
              */
             updated_at?: string | null;
             /**
              * Details
              * @description Type-specific extension. Shape depends on `type` — see `FactDetails` / `ArtifactDetails` / `EpisodeDetails` schemas. Always an object; never null.
              */
-            details?: {
-                [key: string]: unknown;
-            } & (components["schemas"]["FactDetails"] | components["schemas"]["ArtifactDetails"] | components["schemas"]["EpisodeDetails"]);
+            details?: components["schemas"]["FactDetails"] | components["schemas"]["ArtifactDetails"] | components["schemas"]["EpisodeDetails"] | components["schemas"]["DirectiveDetails"];
+        };
+        /**
+         * MemoryGroupPatchRequest
+         * @description ``PATCH /v1/memories/{id}`` — add or remove ``group_ids`` on an
+         *     existing memory row.
+         *
+         *     Scope is intentionally narrow: this endpoint mutates the row's
+         *     group tags only — the *sharing* axis. It does not edit ``text`` or
+         *     any entity id (``user_id`` / ``agent_id`` / ``conv_id`` /
+         *     ``app_id``); those are immutable once ingested.
+         *
+         *     Semantics are set-based and order-independent — ``group_ids`` is an
+         *     unordered set of tags. Adding an id already present is a no-op, and
+         *     removing an id that isn't there is a no-op, so the whole operation
+         *     is idempotent and safe to retry. ``remove`` is applied before
+         *     ``add``; the same id may not appear in both lists (``422
+         *     contradictory_group_ids``). At least one list must be non-empty
+         *     (``422 empty_patch``).
+         *
+         *     Every id in ``add_group_ids`` must be an **active** group on the
+         *     org (see ``POST /v1/groups``); an unknown or archived id is
+         *     rejected with ``422 invalid_group_ids``. ``remove_group_ids`` is
+         *     *not* validated against the registry — a tag can always be removed,
+         *     including one whose group was archived after it was applied.
+         */
+        MemoryGroupPatchRequest: {
+            /**
+             * Add Group Ids
+             * @description Group ids to add to the row. Each must be an active group on the org. Ids already present are ignored (no duplicates). Blank entries are trimmed away.
+             * @example [
+             *       "grp_eng",
+             *       "grp_oncall"
+             *     ]
+             */
+            add_group_ids?: string[];
+            /**
+             * Remove Group Ids
+             * @description Group ids to remove from the row. Ids not currently on the row are ignored. Not validated against the group registry, so an archived group's tag can still be removed.
+             * @example [
+             *       "grp_personal"
+             *     ]
+             */
+            remove_group_ids?: string[];
+        };
+        /**
+         * MemoryMonthlyQuota
+         * @description Quota state for the current period — a calendar month, or your billing
+         *     period on plans that meter per billing period.
+         */
+        MemoryMonthlyQuota: {
+            /**
+             * Period Key
+             * @description Identifier for the current quota period — ``YYYY-MM`` for a calendar month, or the period's start date ``YYYY-MM-DD`` for a billing period.
+             */
+            period_key: string;
+            /**
+             * Resets At
+             * @description ISO-8601 UTC instant when the quota counters reset (the start of the next calendar month, or the end of the current billing period).
+             */
+            resets_at: string;
+            messages_ingested?: components["schemas"]["QuotaCounter"];
+            searches?: components["schemas"]["QuotaCounter"];
         };
         /**
          * MemoryRef
          * @description Thin reference to a memory row written or updated by an ingest
          *     job. Carries only what a client needs for confirmation / per-type
-         *     routing; the full ``Memory`` shape (entity ids, metadata, details,
+         *     routing; the full ``Memory`` shape (entity ids, details,
          *     timestamps, categories) is one ``GET /v1/memories/{id}`` away.
          *
          *     Trade-off rationale: storing the full ``Memory`` shape inside the
-         *     DDB job row duplicates content that already lives in Qdrant —
-         *     every field except ``id`` is derivable via the read endpoints.
-         *     The thin shape keeps the row small while preserving the two
-         *     fields that make a poll response useful on its own: ``type``
+         *     job record duplicates content that is already persisted — every
+         *     field except ``id`` is derivable via the read endpoints. The thin
+         *     shape keeps the record small while preserving the two fields that
+         *     make a poll response useful on its own: ``type``
          *     (lets clients route per memory subtype without a follow-up) and
          *     ``text`` (the human-readable preview, makes the result usable as
          *     a confirmation receipt).
@@ -558,135 +1008,386 @@ export interface components {
             dia_id?: string | null;
         };
         /**
-         * SearchExtras
-         * @description Search-response extras populated when ``include`` opts in to
-         *     composed output. ``stage_timings`` is always populated on a
-         *     context_prompt response (latency breakdown of the retrieval
-         *     pipeline).
+         * Operations
+         * @description Period-total memory operation counters for the org.
          */
-        SearchExtras: {
+        Operations: {
             /**
-             * Context Prompt
-             * @description Assembled markdown context block from xmem's retrieval agent. Populated only when `include` contained `context_prompt`; null otherwise.
+             * Messages Ingested
+             * @description Chat messages ingested via POST /v1/memories — the sum of payload message counts, not request count and not the memories extracted from them.
+             * @default 0
              */
-            context_prompt?: string | null;
+            messages_ingested: number;
             /**
-             * Stage Timings
-             * @description Per-stage retrieval-pipeline latencies (seconds).
+             * Searches
+             * @description POST /v1/memories/search calls (one search per call).
+             * @default 0
              */
-            stage_timings?: {
-                [key: string]: number;
-            };
+            searches: number;
+            /**
+             * Requests
+             * @description Total metered memory API calls (ingest + search).
+             * @default 0
+             */
+            requests: number;
+        };
+        /** Period */
+        Period: {
+            /**
+             * Key
+             * @description Period identifier — ``YYYY-MM`` for ``calendar_month``, or the period's start date ``YYYY-MM-DD`` for ``billing_period``.
+             */
+            key: string;
+            /** Start */
+            start: string;
+            /** End */
+            end: string;
+            /**
+             * Type
+             * @default calendar_month
+             * @enum {string}
+             */
+            type: "calendar_month" | "billing_period";
+        };
+        /** Quota */
+        Quota: {
+            /**
+             * Rate Limit Req Per Min
+             * @description Per-API-key request ceiling across all memory endpoints.
+             */
+            rate_limit_req_per_min: number;
+            monthly: components["schemas"]["MemoryMonthlyQuota"];
         };
         /**
-         * SearchListEnvelope
-         * @description Search response — list envelope + optional ``extras`` block.
+         * QuotaCounter
+         * @description One metered quota dimension: amount used vs the plan cap.
          */
-        SearchListEnvelope: {
+        QuotaCounter: {
             /**
-             * Object
-             * @description Constant discriminator for the resource type.
-             * @default list
-             * @constant
+             * Used
+             * @description Consumed so far in the current quota period.
+             * @default 0
              */
-            object: "list";
+            used: number;
             /**
-             * Data
-             * @description Ranked rows. Mixed kb_types are merged by raw cosine; `score` carries the similarity value.
+             * Limit
+             * @description Cap for the org's plan; ``null`` = unlimited (enterprise).
              */
-            data?: components["schemas"]["Memory"][];
-            /**
-             * Has More
-             * @default false
-             */
-            has_more: boolean;
-            /** Next Cursor */
-            next_cursor?: string | null;
-            /** @description Populated only when `include` opts in. `null` on a default search response. */
-            extras?: components["schemas"]["SearchExtras"] | null;
+            limit?: number | null;
         };
         /**
          * SearchRequest
-         * @description POST /v1/memories/search — vector + filter search over the
-         *     unified memory pool. No ``mode`` flag; opt into composed output
-         *     via ``include``.
+         * @description POST /v1/memories/search — agentic memory search.
          *
-         *     ``filters`` is the full DSL (bare values, ``$in``/``$ne``/``$gte``/
-         *     ``$lte``, ``AND``/``OR``/``NOT``). Empty/omitted filters mean
-         *     "all memories in this org".
+         *     The pipeline has two phases:
+         *
+         *     1. **Retrieve** — embed the query, fetch per-corpus vector
+         *        candidates, optionally rerank. Output: a ranked set of
+         *        :class:`Memory` rows.
+         *     2. **Compose** *(only when ``mode='compose'``)* — an LLM
+         *        context-selection step picks the most relevant subset of the
+         *        candidates and weaves them into a markdown block ready to drop
+         *        into an LLM prompt.
+         *
+         *     ``mode`` toggles whether phase 2 runs:
+         *
+         *     - ``"compose"`` (default) → ``data`` populated with rows **and**
+         *       ``context`` populated with the assembled markdown. The dominant
+         *       use case (memory search → LLM prompt) gets the prompt-ready
+         *       blob without an opt-in.
+         *     - ``"retrieve"`` → ``data`` populated, ``context`` null. Skips
+         *       the LLM compose step (cheaper, faster); for callers building
+         *       their own UI or doing custom downstream processing.
+         *
+         *     Scope is enforced server-side by the per-request store and
+         *     follows "scope by what you
+         *     pass": every scope axis you supply ANDs; an axis you omit is left
+         *     unconstrained. ``org_id`` is derived server-side from your API key. At least one of
+         *     ``user_id`` / ``agent_id`` / ``app_id`` / ``group_ids`` must be
+         *     supplied — an unscoped org-wide search is rejected. ``user_id`` is
+         *     optional here (unlike ingest, where it is required): omit it and
+         *     pass ``group_ids`` to read a shared group across users. No filter
+         *     DSL — the four scope axes are the only narrowing.
+         *
+         *     **Legacy compatibility** (undocumented in the public spec, kept
+         *     so existing SDK installations don't break):
+         *
+         *     - ``filters: {user_id: "X", ...}`` — accepted; ``user_id`` is
+         *       lifted out of ``filters`` if absent at the body root. Other
+         *       filter keys are silently dropped (the new shape doesn't support
+         *       a general filter DSL).
+         *     - ``mode: "rows"`` → translated to ``"retrieve"``.
+         *     - ``mode: "context"`` → translated to ``"compose"``.
+         *     - ``include: ["context_prompt"]`` → sets ``mode="compose"`` and
+         *       drops the value. ``"full_content"`` is dropped silently.
+         *
+         *     These translations are intentionally invisible on the wire — the
+         *     public spec only advertises the new shape — and will be removed
+         *     once consumers have migrated.
          */
         SearchRequest: {
             /**
              * Query
-             * @description Natural-language query text. Embedded server-side; cosine-similarity-ranked.
+             * @description Natural-language query text. Embedded server-side; the search pipeline ranks and selects.
              * @example who likes thai food?
              */
             query: string;
             /**
-             * Filters
-             * @description Filter DSL. Top-level keys are implicit-AND. Supported operators on per-field values: bare value, `null`, `$eq`, `$ne`, `$in`, `$nin`, `$exists`, `$gt`/`$gte`/`$lt`/`$lte`, `$between`. Boolean composition: `AND` / `OR` / `NOT`. `type` (string or `$in` list) restricts which kb_types are scanned (default = all three).
-             * @example {
-             *       "user_id": "alice"
-             *     }
-             * @example {
-             *       "AND": [
-             *         {
-             *           "user_id": "alice"
-             *         },
-             *         {
-             *           "agent_id": "bot-7"
-             *         }
-             *       ]
-             *     }
-             * @example {
-             *       "score_val": {
-             *         "$gte": 0.5
-             *       },
-             *       "type": "fact"
-             *     }
+             * User Id
+             * @description Scope key. When supplied, baked into the per-request store as an AND pin so reads are tenant-isolated at the vector-store filter layer. **Optional** on search (unlike ingest): omit it and pass ``group_ids`` to read a shared group across users. At least one of ``user_id`` / ``agent_id`` / ``app_id`` / ``group_ids`` is required. The compat shim also accepts it inside legacy ``filters.user_id`` and lifts it before field validation runs, so old SDKs that send the pre-#68 wire shape don't 422.
+             * @example user-123
              */
-            filters?: {
-                [key: string]: unknown;
-            };
+            user_id?: string | null;
             /**
-             * Limit
-             * @description Maximum rows to return. 1–100, default 20.
-             * @default 20
+             * Mode
+             * @description Pipeline depth selector.
+             *
+             *     - `compose` (default) — vector retrieval **plus** an LLM context-selection step that picks the most relevant subset, then assembles it into a markdown block. `data` carries the selected rows; `context` carries the assembled markdown. One LLM call.
+             *     - `retrieve` — vector retrieval only. No LLM, no agent, cheaper and faster. `data` carries the raw ranked candidates (the unfiltered set); `context` is null.
+             *
+             *     `data` is populated in both modes; under `compose` it's the LLM-selected subset, under `retrieve` it's the raw candidate set.
+             * @default compose
+             * @enum {string}
              */
-            limit: number;
-            /**
-             * Cursor
-             * @description Opaque pagination cursor from a previous response's `next_cursor`. Tenant-scoped — using one from another org returns 422 `cursor_mismatch`.
-             */
-            cursor?: string | null;
+            mode: "retrieve" | "compose";
             /**
              * Include
-             * @description Opt-in extras. `full_content` populates `details.full_content` on artifact rows (no-op for facts/episodes). `context_prompt` runs xmem's retrieval-agent pipeline; the assembled markdown lands under `extras.context_prompt` and requires both `user_id` and `conv_id` in `filters`.
+             * @description Which corpora to search. Subset to restrict — e.g. `["fact"]` for facts-only. Default is all three.
              */
-            include?: ("full_content" | "context_prompt")[];
+            include?: ("fact" | "artifact" | "episode")[];
+            /**
+             * Group Ids
+             * @description Optional group tags — another AND scope axis. When non-empty, candidate rows must be tagged to at least one of the requested group(s):
+             *
+             *       `org [ AND user_id ] AND ( group_ids ∩ <group_ids> ) [ AND agent_id ] [ AND app_id ]`
+             *
+             *     Group membership (the `∩`) is OR / any-of across the list — pass `[trip_tokyo, trip_paris]` to span both trips.
+             *
+             *     How it composes with `user_id` ("scope by what you pass"):
+             *
+             *     - **omit `user_id`, pass `group_ids`** — the cross-user whole-group read: every user's rows tagged to those group(s). A traveler's AI sees the whole trip's shared facts, from any traveler.
+             *     - **pass both `user_id` and `group_ids`** — the intersection: only the caller's own rows that are also tagged to those group(s) (the caller's slice of the group).
+             *
+             *     (`agent_id` / `app_id` AND on top when set — they narrow further.) Group ids are server-generated unguessable handles (see `POST /v1/groups`), so knowing the id is the access boundary; other users' *untagged* memories never surface.
+             * @example [
+             *       "grp_a1b2c3d4e5f6071829304a5b6c7d8e9f"
+             *     ]
+             */
+            group_ids?: string[];
+            /**
+             * Agent Id
+             * @description Optional agent scope. When set, ANDs onto the active primary scope (whether that's `user_id` or `group_ids`): candidate rows must also carry this exact `agent_id`. Use it to narrow a search to one agent's contributions. Indexed payload key, same axis ingest stamps.
+             * @example bot-7
+             */
+            agent_id?: string | null;
+            /**
+             * App Id
+             * @description Optional app scope. When set, ANDs onto the active primary scope (like `agent_id`): candidate rows must also carry this exact `app_id`. Indexed payload key, same axis ingest stamps.
+             * @example app-3
+             */
+            app_id?: string | null;
         };
         /**
-         * UpdateRequest
-         * @description PATCH /v1/memories/{id} — update text and/or metadata.
+         * SearchResponse
+         * @description POST /v1/memories/search response.
          *
-         *     Metadata is merged onto the existing payload, not replaced.
-         *     Immutable fields (``type``, entity ids, ``created_at``) cannot be
-         *     changed via this endpoint; attempting to set them surfaces
-         *     ``422 immutable_field``.
+         *     ``data`` is **always** populated — both modes return the ranked
+         *     Memory rows from retrieval. ``context`` is populated **only when
+         *     ``mode='compose'``** with the assembled markdown block from the
+         *     LLM context-selection step. ``stage_timings`` is always present
+         *     for per-stage latency attribution.
+         *
+         *     Note that under ``mode='compose'`` the rows in ``data`` are the
+         *     **retrieval candidates** — a possibly larger set than the subset
+         *     the LLM selected and wove into ``context``. Useful for showing
+         *     "everything we found" alongside "what we sent to the model."
          */
-        UpdateRequest: {
+        SearchResponse: {
             /**
-             * Text
-             * @description New fact text. When provided, supersedes the existing fact: a new ACTIVE row is created pointing back at the old one via `supersedes`, the old row's `tag2` flips to superseded. Fact-only — sending `text` on an artifact or episode row returns 422. Empty / whitespace-only values return 422 `empty_text_field`.
+             * Object
+             * @description Constant discriminator for the resource type.
+             * @default search
+             * @constant
              */
-            text?: string | null;
+            object: "search";
             /**
-             * Metadata
-             * @description Customer metadata to merge onto the row. Keys present here replace same-named keys on the existing row; keys absent here are left untouched (no key deletion via PATCH). Setting an immutable field (entity ids, `type`, `created_at`) returns 422 `immutable_field`; setting an internal storage key (`tag1`-`tag5`, `kb_type`, etc.) returns 422 `reserved_field`.
+             * Mode
+             * @description Echoes the request's mode. `compose` ⇒ both `data` and `context` populated; `retrieve` ⇒ `data` populated and `context` null.
+             * @enum {string}
              */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
+            mode: "retrieve" | "compose";
+            /**
+             * Data
+             * @description Ranked Memory rows from retrieval. Populated for both modes. Semantic rows (`fact`/`artifact`/`episode`) are ordered by `score` desc; when `include` requests `lesson`/`procedure`, those directive rows are precision-gated (not vector-scored, `score` is null) and lead the list ahead of the semantic rows. For `mode=compose`, the semantic rows are the candidates considered by the context-selection step — a (possibly larger) superset of what ended up in `context`.
+             */
+            data?: components["schemas"]["Memory"][];
+            /**
+             * Context
+             * @description Assembled markdown context block ready for prompt insertion. Populated only when `mode=compose`; null otherwise.
+             */
+            context?: string | null;
+            /**
+             * Stage Timings
+             * @description Per-stage retrieval-pipeline latencies (seconds). Populated in both modes.
+             */
+            stage_timings?: {
+                [key: string]: number;
+            };
+            /**
+             * Context Selection Applied
+             * @description True when the LLM context-selection step ran. False indicates the pipeline fell through (e.g. an empty candidate pool, or context selection disabled by config).
+             * @default false
+             */
+            context_selection_applied: boolean;
+        };
+        /**
+         * StorageSnapshot
+         * @description Currently-active per-type row counts.
+         *
+         *     Cached harder than operations (computing the counts is expensive);
+         *     ``as_of`` reflects the mint time of the cached snapshot and may
+         *     lag the response-level ``as_of``.
+         */
+        StorageSnapshot: {
+            /**
+             * Memories Active
+             * @default 0
+             */
+            memories_active: number;
+            /**
+             * Episodes Active
+             * @default 0
+             */
+            episodes_active: number;
+            /**
+             * Artifacts Active
+             * @default 0
+             */
+            artifacts_active: number;
+            /** As Of */
+            as_of: string;
+        };
+        /**
+         * TriggerRequest
+         * @description POST /v1/memories/trigger — procedural-memory recall for a pre-tool-call hook.
+         *
+         *     An agent calls this right before (or just after) a tool runs to pull the
+         *     ``lesson``/``procedure`` insights that past sessions recorded about the symbols
+         *     it's touching — what worked, what didn't. Recall fires on the symbol tripwire,
+         *     never a semantic query: the server extracts greppable identifiers from ``action``
+         *     (``tool`` / ``args`` / ``output``) or takes them
+         *     straight from ``entities``, and matches them exactly against directives'
+         *     ``trigger_entities``.
+         *
+         *     What comes back is advisory, not a mandate — ranked :class:`Memory` rows
+         *     (``type: "lesson" | "procedure"``) in the shared :class:`SearchResponse`, with the
+         *     assembled markdown in ``context`` under ``mode="compose"``.
+         *
+         *     Scope follows "scope by what you pass": every axis you supply ANDs; ``org_id``
+         *     is derived server-side from your API key. At least one of ``user_id`` / ``agent_id`` / ``app_id`` /
+         *     ``group_ids`` is required — an unscoped org-wide recall is rejected.
+         */
+        TriggerRequest: {
+            /** @description The in-flight tool call the agent is touching right now — the firing signal for recall. Greppable identifiers are extracted server-side (`tool` name, `args` values, optional `output`) and matched exactly against directives' `trigger_entities`. Supply this or `entities`. */
+            action?: components["schemas"]["ActionContext"] | null;
+            /**
+             * Entities
+             * @description Escape hatch: pre-extracted greppable identifiers to fire on, bypassing server-side extraction from `action`. Use when the client already knows the exact symbols the agent is touching.
+             * @example [
+             *       "tool_loop.py",
+             *       "AbortError"
+             *     ]
+             */
+            entities?: string[] | null;
+            /**
+             * Include
+             * @description Which procedural corpora to recall. Defaults to both (`lesson`/`procedure`); subset to restrict (e.g. `["lesson"]`).
+             */
+            include?: ("lesson" | "procedure")[];
+            /**
+             * Namespace
+             * @description Namespace the agent is working in right now — repo, customer account, service (whatever was passed at ingest). Narrows recall to directives learned under that namespace **plus global ones** (ingested with no namespace) — it never hides global directives, so it is always safe to pass. Unrelated to the tenancy axes.
+             * @example MemHub-Backend
+             */
+            namespace?: string | null;
+            /**
+             * Task
+             * @description The agent's current goal, in one line. Fed to the relevance gate under `mode=compose` so it keeps only the insights that help with THIS task.
+             * @example fix finalize-on-abort in the tool loop
+             */
+            task?: string | null;
+            /**
+             * Mode
+             * @description Pipeline depth selector.
+             *
+             *     - `compose` (default) — symbol-tripwire recall **plus** an LLM relevance-gate step that keeps only the insights relevant to `task`, then assembles a markdown block. `data` carries the gated rows; `context` carries the markdown. One LLM call.
+             *     - `retrieve` — recall only. No LLM, cheaper and faster. `data` carries the matched rows; `context` is null.
+             * @default compose
+             * @enum {string}
+             */
+            mode: "retrieve" | "compose";
+            /**
+             * User Id
+             * @description Scope key. When supplied, applied as an AND pin so reads are tenant-isolated at the storage filter layer. Optional: omit it and pass `group_ids` to read a shared group across users. At least one of `user_id` / `agent_id` / `app_id` / `group_ids` is required.
+             * @example user-123
+             */
+            user_id?: string | null;
+            /**
+             * Group Ids
+             * @description Optional group tags — another AND scope axis. When non-empty, matched rows must be tagged to at least one of the requested group(s). Group ids are server-generated unguessable handles (see `POST /v1/groups`); knowing the id is the access boundary.
+             * @example [
+             *       "grp_a1b2c3d4e5f6071829304a5b6c7d8e9f"
+             *     ]
+             */
+            group_ids?: string[];
+            /**
+             * Agent Id
+             * @description Optional agent scope. When set, ANDs onto the active primary scope (whether that's `user_id` or `group_ids`): matched rows must also carry this exact `agent_id`.
+             * @example bot-7
+             */
+            agent_id?: string | null;
+            /**
+             * App Id
+             * @description Optional app scope. When set, ANDs onto the active primary scope (like `agent_id`): matched rows must also carry this exact `app_id`.
+             * @example app-3
+             */
+            app_id?: string | null;
+        };
+        /**
+         * UsageResponse
+         * @description Top-level shape for ``GET /v1/usage``.
+         */
+        UsageResponse: {
+            /**
+             * Object
+             * @default usage
+             * @constant
+             */
+            object: "usage";
+            /**
+             * As Of
+             * @description When this snapshot was computed.
+             */
+            as_of: string;
+            period: components["schemas"]["Period"];
+            /**
+             * Tier
+             * @description The org's subscription tier; ``None`` if unset.
+             */
+            tier?: string | null;
+            operations?: components["schemas"]["Operations"];
+            /**
+             * Daily
+             * @description ``None`` when ``?daily=false`` (default); populated when ``?daily=true``.
+             */
+            daily?: components["schemas"]["DailyEntry"][] | null;
+            /**
+             * By Api Key
+             * @description ``None`` when ``?by_api_key=false`` (default); populated when ``?by_api_key=true``.
+             */
+            by_api_key?: components["schemas"]["ByApiKeyEntry"][] | null;
+            storage: components["schemas"]["StorageSnapshot"];
+            quota: components["schemas"]["Quota"];
         };
         /** ValidationError */
         ValidationError: {
@@ -698,10 +1399,81 @@ export interface components {
             type: string;
         };
         /**
+         * WebhookConfig
+         * @description Wire shape of the org's webhook config.
+         */
+        WebhookConfig: {
+            /**
+             * Object
+             * @description Constant discriminator for the resource type.
+             * @default webhook
+             * @constant
+             */
+            object: "webhook";
+            /**
+             * Url
+             * @description Configured subscriber URL.
+             */
+            url: string;
+            /**
+             * Events
+             * @description Event types currently subscribed.
+             */
+            events: ("memory.learning.completed" | "memory.learning.failed")[];
+            /**
+             * Enabled
+             * @description Whether deliveries are active.
+             */
+            enabled: boolean;
+            /**
+             * Secret
+             * @description Signing secret used to verify `X-Webhook-Signature`. Returned in **full only when freshly minted** — a first `PUT` (create) or `PUT?rotate_secret=true`. Store it then; every other response (a plain edit, or `GET`) masks it.
+             */
+            secret: string;
+            /**
+             * Created At
+             * Format: date-time
+             * @description ISO-8601 timestamp the config was first created.
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             * @description ISO-8601 timestamp of the most recent edit.
+             */
+            updated_at?: string | null;
+        };
+        /**
+         * WebhookConfigRequest
+         * @description ``PUT /v1/webhooks`` — set or replace the org's webhook config.
+         */
+        WebhookConfigRequest: {
+            /**
+             * Url
+             * @description HTTPS endpoint Xtrace POSTs terminal ingest events to. Must resolve to a public address — private / loopback / link-local hosts are rejected.
+             * @example https://api.zeabur.example/xtrace/webhooks
+             */
+            url: string;
+            /**
+             * Events
+             * @description Event types to receive. Omit (or null) to subscribe to all events. An empty list is rejected.
+             * @example [
+             *       "memory.learning.completed",
+             *       "memory.learning.failed"
+             *     ]
+             */
+            events?: ("memory.learning.completed" | "memory.learning.failed")[] | null;
+            /**
+             * Enabled
+             * @description When false, the config is stored but no events are delivered. Lets you pause delivery without losing the URL.
+             * @default true
+             */
+            enabled: boolean;
+        };
+        /**
          * FactDetails
          * @description Per-row fact details — sits under ``Memory.details`` when
-         *     ``Memory.type == "fact"``. Mirrors the SoT shape, not xmem's raw
-         *     ``Fact`` shape: e.g. xmem's ``source_artifact_id`` → ``artifact_id``.
+         *     ``Memory.type == "fact"``.
          */
         FactDetails: {
             /**
@@ -743,11 +1515,6 @@ export interface components {
          * ArtifactDetails
          * @description Per-row artifact details under ``Memory.details`` when
          *     ``Memory.type == "artifact"``.
-         *
-         *     Wire-field renames vs xmem's ``Artifact`` schema:
-         *     - ``Artifact.name`` → ``details.title``
-         *     - ``Artifact.descriptor_fact_ids`` → ``details.source_fact_ids``
-         *     - ``Artifact.root_artifact_id`` → ``details.root_id``
          *
          *     ``full_content`` is opt-in — omitted on list/search by default,
          *     included on ``GET /v1/memories/{id}`` and when
@@ -810,6 +1577,68 @@ export interface components {
             /** Artifact Ids */
             artifact_ids?: string[];
         };
+        /**
+         * DirectiveDetails
+         * @description Per-row directive details under ``Memory.details`` when ``Memory.type`` is
+         *     ``"lesson"`` or ``"procedure"`` — a directive recalled by the symbol tripwire.
+         *
+         *     Populated from the recalled ``Fact`` plus the relevance gate. ``because`` /
+         *     ``confidence`` are filled only under ``mode=compose`` (the gate ran); under
+         *     ``mode=retrieve`` they are null (deterministic stage-1 tripwire only).
+         */
+        DirectiveDetails: {
+            /**
+             * Fact Type
+             * @description `lesson` or `procedure`.
+             * @default null
+             */
+            fact_type: string | null;
+            /**
+             * Trigger Entities
+             * @description The concrete file/symbol anchors this directive fires on.
+             */
+            trigger_entities?: string[];
+            /**
+             * Matched On
+             * @description The subset of `trigger_entities` the in-flight action actually matched.
+             */
+            matched_on?: string[];
+            /**
+             * Because
+             * @description Why the gate kept this directive for the current task. Null under `mode=retrieve`.
+             * @default null
+             */
+            because: string | null;
+            /**
+             * Confidence
+             * @description Gate confidence (0–1). Null under `mode=retrieve`.
+             * @default null
+             */
+            confidence: number | null;
+            /**
+             * Observation Count
+             * @description How many times this directive has been re-confirmed.
+             * @default null
+             */
+            observation_count: number | null;
+            /**
+             * Last Confirmed At
+             * Format: date-time
+             * @description ISO-8601 of the last re-confirmation.
+             * @default null
+             */
+            last_confirmed_at: string | null;
+            /**
+             * Steps
+             * @description Typed procedure steps, in order (`type: "procedure"` only). The row's `text` already renders them as a numbered list; this is the structured form for callers that format their own.
+             * @default null
+             * @example [
+             *       "Run the build",
+             *       "Push the image"
+             *     ]
+             */
+            steps: string[] | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -830,11 +1659,13 @@ export interface operations {
                 conv_id?: string | null;
                 /** @description Filter by app_id (exact match). */
                 app_id?: string | null;
+                /** @description Filter to rows tagged with this group id. Singular on list; the full DSL on `POST /v1/memories/search` supports multi-id `$in` filtering. */
+                group_id?: string | null;
                 /** @description Restrict results to one memory subtype. Default: all three. */
                 type?: ("fact" | "artifact" | "episode") | null;
                 /** @description Opaque pagination cursor from a previous response's `next_cursor`. Must match this request's `order` and the issuing org (mismatch → 422 `cursor_mismatch`). */
                 cursor?: string | null;
-                /** @description Maximum rows per page. 1–100, default 50. */
+                /** @description Maximum rows per page. 1–500, default 50. */
                 limit?: number;
                 /** @description Sort order on `(created_at, id)`. */
                 order?: "created_at_desc" | "created_at_asc";
@@ -856,7 +1687,7 @@ export interface operations {
                     "application/json": components["schemas"]["ListEnvelope"];
                 };
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key. Body carries `detail.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -937,17 +1768,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key. Body carries `detail.code = "unauthorized"`. */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE — those are reserved for API-key callers. Body carries `detail.code = "forbidden"`. */
-            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1004,7 +1826,7 @@ export interface operations {
                     "application/json": components["schemas"]["IngestJobResponse"];
                 };
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key. Body carries `detail.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1070,19 +1892,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SearchListEnvelope"];
+                    "application/json": components["schemas"]["SearchResponse"];
                 };
             };
-            /** @description `detail.code = "missing_user_id"` or `"missing_conv_id"` — `include=context_prompt` was requested but the corresponding entity is absent from `filters` (the retrieval-agent pipeline needs both to construct the right cache namespace). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key. Body carries `detail.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1091,13 +1904,140 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Validation error. Possible codes: `unsupported_include_option`, `cursor_mismatch`, `search_failed`, or Pydantic field validation. */
+            /** @description Validation error — invalid query, user_id, mode, or include. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `detail.code = "search_failed"` — store init, retrieval, or row-build failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    trigger_memory_v1_memories_trigger_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TriggerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            /** @description Authentication failed. Missing / invalid API key. Body carries `detail.code = "unauthorized"`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation error — missing firing signal (`action`/`entities`), no scope axis, or invalid `include`/`mode`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `detail.code = "trigger_failed"` — auth resolution failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_memory_revisions_v1_memories__memory_id__revisions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListEnvelope"];
+                };
+            };
+            /** @description Authentication failed. Missing / invalid API key. Body carries `detail.code = "unauthorized"`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `detail.code = "memory_not_found"` — no row with that id under this org. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry. */
@@ -1140,7 +2080,7 @@ export interface operations {
                     "application/json": components["schemas"]["Memory"];
                 };
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key. Body carries `detail.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1205,7 +2145,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key. Body carries `detail.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1214,16 +2154,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE — those are reserved for API-key callers. Body carries `detail.code = "forbidden"`. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `detail.code = "memory_not_found"` — unknown id, or a fact that was already soft-deleted (`tag2` is anything other than `active`). */
+            /** @description `detail.code = "memory_not_found"` — unknown id (or already deleted). */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -1250,7 +2181,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description `detail.code = "delete_failed"` — storage error on hard delete (artifacts / episodes). */
+            /** @description `detail.code = "delete_failed"` — storage error removing the point. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1261,7 +2192,7 @@ export interface operations {
             };
         };
     };
-    patch_memory_v1_memories__memory_id__patch: {
+    patch_memory_group_ids_v1_memories__memory_id__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -1272,11 +2203,11 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpdateRequest"];
+                "application/json": components["schemas"]["MemoryGroupPatchRequest"];
             };
         };
         responses: {
-            /** @description Successful Response */
+            /** @description Updated. Returns the full memory with its new `group_ids`. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1285,16 +2216,7 @@ export interface operations {
                     "application/json": components["schemas"]["Memory"];
                 };
             };
-            /** @description `detail.code = "invalid_request"` — empty PATCH body (neither `text` nor `metadata`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = "unauthorized"`. */
+            /** @description Authentication failed. Missing / invalid API key. Body carries `detail.code = "unauthorized"`. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1303,16 +2225,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE — those are reserved for API-key callers. Body carries `detail.code = "forbidden"`. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `detail.code = "memory_not_found"`. */
+            /** @description `detail.code = "memory_not_found"` — no readable row with that id under this org. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -1321,7 +2234,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Validation error. Possible codes: `immutable_field` (entity ids / `type` / `created_at` in `metadata`), `reserved_field` (internal storage key in `metadata`), `empty_text_field` (empty / whitespace-only `text`), or `invalid_request` (`text` patch on a non-fact row). */
+            /** @description `detail.code` is one of: `empty_patch` (neither list supplied), `contradictory_group_ids` (same id in both lists), `invalid_group_ids` (an added id is unknown or archived), or `invalid_request` (resulting tag count exceeds `MAX_GROUP_IDS_PER_INGEST`). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1339,7 +2252,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description Server-side failure. Body carries `detail.code = "server_error"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header. */
+            /** @description `detail.code = "patch_failed"` — storage error writing the tags. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -1347,6 +2260,312 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
+            };
+        };
+    };
+    get_usage_v1_usage_get: {
+        parameters: {
+            query?: {
+                /** @description Include the per-day ``daily[]`` array (one entry per calendar day in the period). Off by default to keep the response cheap; the dashboard chart opts in. */
+                daily?: boolean;
+                /** @description Include the per-API-key breakdown with each key's ``name`` / ``first_n`` display fields. Off by default — adds extra lookups. */
+                by_api_key?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_groups_v1_groups_get: {
+        parameters: {
+            query?: {
+                /** @description When true, the response includes archived groups in addition to active ones. Default false — most callers only need the currently-taggable set. */
+                include_archived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupListEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_group_v1_groups_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Group"];
+                };
+            };
+            /** @description `detail.code = "groups_quota_exceeded"` — org is at `MAX_GROUPS_PER_ORG` active groups. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_group_v1_groups__group_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Group"];
+                };
+            };
+            /** @description `detail.code = "group_not_found"` — unknown id or id belonging to a different org. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_group_v1_groups__group_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Group"];
+                };
+            };
+            /** @description `detail.code = "group_not_found"`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_group_v1_groups__group_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Group"];
+                };
+            };
+            /** @description `detail.code = "group_not_found"`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description `detail.code = "invalid_request"` — e.g. `status` set to a value other than `active` / `archived`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_webhook_v1_webhooks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookConfig"];
+                };
+            };
+            /** @description `detail.code = "webhook_not_found"` — no config set for this org. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    put_webhook_v1_webhooks_put: {
+        parameters: {
+            query?: {
+                /** @description When true, mint a fresh signing secret even if a config already exists. Default false preserves the existing secret so an URL/events edit doesn't break the subscriber. */
+                rotate_secret?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookConfig"];
+                };
+            };
+            /** @description `detail.code = "invalid_webhook_url"` — URL is malformed, not https, or resolves to a non-public address. Or `"invalid_request"` — empty `events`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    delete_webhook_v1_webhooks_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

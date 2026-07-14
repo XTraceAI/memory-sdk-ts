@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "VecDB Memory API",
-    "description": "Unified memory API at `/v1/memories/*`. Mode-free reads (list, search,\nget-by-id), async-by-default ingest (`POST /v1/memories` \u2192 202 + job_id,\nor `?wait=true` for inline 200 within 30s), and polling at\n`GET /v1/memories/jobs/{job_id}`.\n\n## Authentication\n\nSend **both**:\n\n- `Authorization: Token <api-key>` *or* `x-api-key: <api-key>`\n- `X-Org-Id: <org-id>`\n\nTenancy is keyed by `(org_id, key_hash)`. Every row is scoped to the\ncalling org; cross-org reads are not possible even with a guessed id.\n\n## Ingest contract (`POST /v1/memories`)\n\n```\n{\n  \"messages\":          [...],     // REQUIRED \u2014 chat-style turns\n  \"user_id\":           \"alice\",   // REQUIRED \u2014 per-user scope\n  \"conv_id\":           \"conv-1\",  // REQUIRED \u2014 conversation anchor\n  \"agent_id\":          \"...\",     // optional\n  \"app_id\":            \"...\",     // optional\n  \"metadata\":          {...},     // optional, free-form customer keys\n  \"extract_artifacts\": false      // opt-in to artifact-extraction stage\n}\n```\n\n- **Required entities:** `user_id` and `conv_id`. `user_id` keys the\n  per-user namespace (facts accumulate across that user's\n  conversations); `conv_id` anchors each extracted memory to a session\n  for replay, export, and bulk retract.\n- Facts are always extracted from messages. Episodes are always\n  extracted (`conv_id` is guaranteed). Artifacts are extracted only\n  when `extract_artifacts: true` is set.\n- The server picks live vs batch extraction by message count; no\n  client-facing pipeline hint exists.\n- Returns `202 Accepted` + `IngestJobResponse` with `status: \"pending\"`\n  by default. With `?wait=true`, the server holds the connection up to\n  ~30s and returns `200 OK` + terminal `IngestJobResponse` if\n  extraction completes within the window; otherwise falls back to 202.\n\n## Memory object\n\n```\n{\n  \"id\":         \"<uuid>\",\n  \"object\":    \"memory\",\n  \"type\":      \"fact\" | \"artifact\" | \"episode\",\n  \"text\":      \"short readable preview\",\n  \"user_id\":   \"...\", \"agent_id\": \"...\", \"conv_id\": \"...\", \"app_id\": \"...\",\n  \"metadata\":   {...},\n  \"categories\": [...],\n  \"score\":      0.83,         // present on search responses only\n  \"created_at\": \"2026-05-15T18:42:11Z\",\n  \"updated_at\": \"2026-05-15T18:42:11Z\",\n  \"details\":    {...}         // type-specific; see FactDetails /\n                              //  ArtifactDetails / EpisodeDetails schemas\n}\n```\n\n`type` is the discriminator. `details` carries the per-type extension\nfields; the three variants are in the components section.\n\n## Pagination\n\nCursor-based on list and search. Cursors are opaque, tenant-scoped\nstrings. `has_more` plus `next_cursor` drive the next page. Default\nordering is `created_at_desc`; pass `order=created_at_asc` for the\nreverse. `limit` is 1\u2013100 (default 50 on list, 20 on search).\n\n## Filter DSL\n\n`GET /v1/memories` accepts flat equality on the four entity fields\n(`user_id`, `agent_id`, `conv_id`, `app_id`) plus `type`.\n\n`POST /v1/memories/search` accepts the full DSL in the `filters`\nobject:\n\n| Operator   | Meaning                                          |\n| ---------- | ------------------------------------------------ |\n| bare value | exact match (e.g. `{\"user_id\": \"alice\"}`)         |\n| `null`     | field is unset (absent or null)                   |\n| `$eq`      | explicit equality (same as bare value)            |\n| `$ne`      | not equal AND field is set (SQL semantics)        |\n| `$in`      | one-of (`{\"agent_id\": {\"$in\": [\"bot-a\",\"bot-b\"]}}`) |\n| `$nin`     | none-of (MongoDB semantics \u2014 null/absent passes)  |\n| `$exists`  | `true` = field set, `false` = field unset         |\n| `$gt` / `$gte` / `$lt` / `$lte` | range comparators                  |\n| `$between` | `[lo, hi]` inclusive range                        |\n| `AND`      | `{\"AND\": [<clause>, <clause>, ...]}` \u2014 intersection |\n| `OR`       | `{\"OR\":  [<clause>, ...]}` \u2014 union                  |\n| `NOT`      | `{\"NOT\": <clause>}` \u2014 negation                      |\n\nTop-level keys are implicit-AND'd. Unknown operators are silently\nignored. Filters apply to any indexed payload field, including\ncustomer metadata keys (those land as their own indexed payload keys).\n\n## Error envelope\n\nAll non-2xx responses use a single body shape:\n\n```\n{\n  \"detail\": {\n    \"code\":    \"<stable error code>\",\n    \"message\": \"<human-readable summary>\"\n  }\n}\n```\n\nSwitch on `detail.code` rather than parsing the message. Each endpoint\ndeclares the codes it can return.\n\nPydantic field-validation failures (422) use the FastAPI default\nshape \u2014 `detail` is an array of `{loc, msg, type}` entries listing\neach invalid field.\n\n## Response headers\n\n- `X-Request-Id` \u2014 echo of the inbound request id, or a server-\n  generated UUID. Use this when filing support requests; operator\n  logs are keyed on it.\n- `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` \u2014\n  current bucket state for this `(org_id, key_hash)` pair.\n- `Retry-After` \u2014 present on 429 responses, seconds until the next\n  permitted request.\n",
+    "description": "Unified memory API at `/v1/memories/*`. Mode-free reads (list, search,\nget-by-id), async-by-default ingest (`POST /v1/memories` \u2192 202 + job_id,\nor `?wait=true` for inline 200 within 30s), and polling at\n`GET /v1/memories/jobs/{job_id}`.\n\n## Authentication\n\nSend your API key \u2014 the key is the sole identity:\n\n- `Authorization: Token <api-key>` *or* `x-api-key: <api-key>`\n\nThe org is derived server-side from the key; you no longer send an org\nid. Every row is scoped to the calling org; cross-org reads are not\npossible even with a guessed id.\n\n> **Deprecated:** `X-Org-Id` is still accepted during a compatibility\n> window. If sent, it must match the key's org (a mismatch returns\n> `403 org_mismatch`); it will be removed in a future release. New\n> integrations must not send it.\n\n**Optional diagnostic header.** You may send\n`X-Xtrace-Client: <name>/<version>` (e.g. `xtrace-sdk/2.4.1`) on any\nrequest. It never affects auth or behavior \u2014 it's used only to measure\nclient-version adoption. Absence is fine.\n\n## Ingest contract (`POST /v1/memories`)\n\n```\n{\n  \"messages\":          [...],     // REQUIRED \u2014 chat-style turns\n  \"user_id\":           \"alice\",   // REQUIRED \u2014 per-user scope\n  \"conv_id\":           \"conv-1\",  // REQUIRED \u2014 conversation anchor\n  \"agent_id\":          \"...\",     // optional\n  \"app_id\":            \"...\",     // optional\n  \"timestamp_format\":  \"%Y-%m-%d\", // optional \u2014 strptime fmt for dated batch turns\n  \"extract_artifacts\": false,     // opt-in to artifact-extraction stage\n  \"group_ids\":         []         // optional \u2014 see \"Group tagging\" below\n}\n```\n\n- **Required entities:** `user_id` and `conv_id`. `user_id` keys the\n  per-user namespace (facts accumulate across that user's\n  conversations); `conv_id` anchors each extracted memory to a session\n  for replay, export, and bulk retract.\n- Facts are always extracted from messages. Episodes are always\n  extracted (`conv_id` is guaranteed). Artifacts are extracted only\n  when `extract_artifacts: true` is set.\n- The server picks live vs batch extraction by message count; no\n  client-facing pipeline hint exists.\n- Returns `202 Accepted` + `IngestJobResponse` with `status: \"pending\"`\n  by default. With `?wait=true`, the server holds the connection up to\n  ~30s and returns `200 OK` + terminal `IngestJobResponse` if\n  extraction completes within the window; otherwise falls back to 202.\n\n## Group tagging\n\nGroups are client-registered tagging targets. A group MAY carry a\n`prompt` describing what belongs in it; the ingest classifier reads\neach prompt and decides \u2014 per extracted memory \u2014 which groups (if any)\nto tag the row with. A group WITHOUT a prompt is a **catch-all**:\nevery extracted memory judged shareable is tagged with it, no\nper-group matching. The tags become a filterable axis on search and\nlist, so other users (e.g. participants in the same trip) can find\neach other's tagged memories without needing direct access to the\nauthoring user.\n\n1. **Register groups** via `POST /v1/groups` (one-time per group).\n   Returns an opaque `grp_<32-hex>` id. Omit `prompt` (or send null)\n   to register a catch-all group; an empty string is rejected (422).\n2. **Pass ids on ingest** in `IngestRequest.group_ids`. Cap is\n   `MAX_GROUP_IDS_PER_INGEST` (default 20) \u2014 over-cap \u2192 `422\n   invalid_request`.\n3. **Unknown / archived ids are dropped silently** and echoed back in\n   `IngestResult.ignored_group_ids`. A single stale id never fails an\n   ingest \u2014 stale-cache self-correction is the deliberate model.\n4. **Personal memories are never group-tagged.** The classifier\n   judges every extracted memory personal-vs-shareable first\n   (personal \u2248 private circumstances: health, family matters,\n   finances, credentials \u2014 not merely \"about the user\"). Personal\n   rows stay in the authoring user's personal scope and are excluded\n   from ALL groups, prompted and catch-all alike. If the verdict is\n   unavailable the row is left untagged (fails closed).\n5. **Tags are stamped per-item.** Each shareable fact / artifact /\n   episode gets the prompted groups its content matches plus every\n   requested catch-all group. A row may end up with zero tags even\n   when several `group_ids` were sent.\n6. **`group_ids` is frozen at ingest.** `PATCH /v1/memories/{id}`\n   rejects attempts to set it (`422 immutable_field`). Edits to a\n   group's `prompt` do NOT retroactively re-tag historical rows; a\n   prompt can be added to a catch-all group later (it stops being a\n   catch-all going forward) but never removed.\n\n### Filtering by group on search\n\n```\nPOST /v1/memories/search\n{\n  \"query\":     \"what's the plan for this trip?\",\n  \"user_id\":   \"bob\",\n  \"group_ids\": [\"grp_tokyo_2026\", \"grp_paris_2027\"]\n}\n```\n\nWhen `group_ids` is non-empty, the read scope is the **union** of the\ncaller's own memories and everything tagged to the requested groups:\n\n```\norg\n  AND ( user_id == <user_id>  OR  group_ids \u2229 <group_ids> )\n  AND agent_id == <agent_id>      # when set\n  AND app_id   == <app_id>        # when set\n```\n\n`agent_id` / `app_id` AND on top of the union \u2014 they narrow it (e.g.\n\"the trip facts, but only this agent's\"), never widen it.\n\nSo the response carries the caller's personal memories **and** all\nmemories tagged to those groups, from any user in the org. A\ntraveler's AI asking \"what's the plan?\" gets the traveler's own\npreferences *and* the group's shared trip facts in one call \u2014 not\none or the other. Group membership (`\u2229`) is OR / any-of across the\nlist. Knowing a group id is the access boundary (ids are server-\ngenerated unguessable handles); other users' *untagged* memories\nnever surface. Omit `group_ids` (or pass `[]`) to scope to the\ncaller's own memories only.\n\nEach returned row reports its **actual stored** entity ids\n(`user_id`, `agent_id`, `app_id`) and `group_ids` \u2014 the server\nround-trips to stored metadata, so under union you can tell which\nrows are the caller's own (their `user_id` matches) versus shared\nfrom another traveler (a different `user_id`). Matches what you'd\nsee on `GET /v1/memories/{id}` or the list endpoint.\n\n## Memory object\n\n```\n{\n  \"id\":         \"<uuid>\",\n  \"object\":    \"memory\",\n  \"type\":      \"fact\" | \"artifact\" | \"episode\",\n  \"text\":      \"short readable preview\",\n  \"user_id\":   \"...\", \"agent_id\": \"...\", \"conv_id\": \"...\", \"app_id\": \"...\",\n  \"group_ids\":  [\"grp_...\"],  // tags from the group classifier\n  \"categories\": [...],\n  \"score\":      0.83,         // present on search responses only\n  \"created_at\": \"2026-05-15T18:42:11Z\",\n  \"updated_at\": \"2026-05-15T18:42:11Z\",\n  \"details\":    {...}         // type-specific; see FactDetails /\n                              //  ArtifactDetails / EpisodeDetails schemas\n}\n```\n\n`type` is the discriminator. `details` carries the per-type extension\nfields; the three variants are in the components section.\n\n## Pagination\n\nCursor-based on list. Cursors are opaque, tenant-scoped strings.\n`has_more` plus `next_cursor` drive the next page. Default ordering\nis `created_at_desc`; pass `order=created_at_asc` for the reverse.\n`limit` is 1\u2013500 (default 50). Search is not cursor-paginated \u2014 the\nretrieval pipeline returns a bounded ranked set per call.\n\n## Filtering\n\n`GET /v1/memories` accepts flat equality on the four entity fields\n(`user_id`, `agent_id`, `conv_id`, `app_id`), `group_id` (singular \u2014\nfilters to rows tagged with this group), plus `type`.\n\n`POST /v1/memories/search` is agentic: scope is enforced by the\nrequired `user_id` field, corpora are picked via `include`\n(subset of `{\"fact\",\"artifact\",\"episode\"}`), and `mode` selects\nthe pipeline depth:\n\n- `compose` (default) \u2014 run vector retrieval *and* the LLM context-\n  selection step that assembles a markdown prompt block. Response\n  carries both `data` (the retrieval candidates as Memory rows) and\n  `context` (the assembled markdown ready to drop into an LLM\n  prompt). The dominant chat-app use case.\n- `retrieve` \u2014 stop after vector retrieval. Cheaper, faster, no LLM\n  call. Response carries `data`; `context` is null. For callers\n  building their own UI or doing custom downstream processing.\n\n`data` is **always** populated regardless of mode. Under `compose`,\n`data` is the set the LLM saw before context-selection \u2014 possibly a\nsuperset of what wound up in `context`. Useful for showing\n\"everything we found\" alongside \"what we sent to the model.\"\n\nThe optional `group_ids` flips scope from per-user to per-group for\nthe trip-sharing read path (see \"Filtering by group on search\") \u2014\npass the set of groups you want to search across (OR / any-of).\n\n`agent_id` and `app_id` are optional narrowing pins: when set they\n**AND** onto whichever primary scope is active (user or group), so\n`group_ids=[trip] + agent_id=bot` returns that bot's rows within the\ntrip. They never replace the primary scope. No other caller-supplied\nfilter DSL.\n\n## Error envelope\n\nAll non-2xx responses use a single body shape:\n\n```\n{\n  \"detail\": {\n    \"code\":    \"<stable error code>\",\n    \"message\": \"<human-readable summary>\"\n  }\n}\n```\n\nSwitch on `detail.code` rather than parsing the message. Each endpoint\ndeclares the codes it can return.\n\nPydantic field-validation failures (422) use the FastAPI default\nshape \u2014 `detail` is an array of `{loc, msg, type}` entries listing\neach invalid field.\n\n## Response headers\n\n- `X-Request-Id` \u2014 echo of the inbound request id, or a server-\n  generated UUID. Use this when filing support requests; operator\n  logs are keyed on it.\n- `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` \u2014\n  current bucket state for this `(org_id, key_hash)` pair.\n- `Retry-After` \u2014 present on 429 responses, seconds until the next\n  permitted request.\n",
     "version": "1.0.0"
   },
   "paths": {
@@ -11,8 +11,8 @@
         "tags": [
           "memories"
         ],
-        "summary": "Ingest memories (async)",
-        "description": "Async ingest. Returns ``202 + job_id`` by default.\n\nWith ``?wait=true`` the server holds the connection up to\n``Settings.MEMORY_INGEST_WAIT_TIMEOUT_SECONDS`` (30s default). If\nextraction completes within that window, the response is\n``200 OK`` with the terminal job inline. If the deadline elapses\nfirst, the response falls back to ``202 Accepted`` with\n``status: \"pending\"`` and the caller resumes the polling pattern\nagainst ``GET /v1/memories/jobs/{job_id}``.\n\nThe extraction task is spawned via ``asyncio.create_task`` and\nawaited via ``asyncio.wait(timeout=\u2026, return_when=FIRST_COMPLETED)``\n\u2014 ``wait`` doesn't cancel pending tasks on timeout, so the\nbackground extraction continues regardless of whether the wait\nwindow elapsed. Strong reference held in :data:`_pending_jobs`\nkeeps the task from being garbage-collected.",
+        "summary": "Ingest memories",
+        "description": "Async ingest. Returns ``202 + job_id`` by default; the extraction\nruns in the background and the caller polls\n``GET /v1/memories/jobs/{job_id}``.\n\nWith ``?wait=true`` the server holds the connection up to ~30\nseconds waiting for extraction to terminate. If it finishes in\ntime, the response is ``200 OK`` with the terminal job inline\n(``status: \"succeeded\"`` or ``\"failed\"``). If the wait window\nelapses first, the response falls back to ``202 + pending`` and\nthe caller resumes the normal polling pattern.",
         "operationId": "ingest_memories_v1_memories_post",
         "parameters": [
           {
@@ -80,7 +80,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key. Body carries `detail.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -108,16 +108,6 @@
                 }
               }
             }
-          },
-          "403": {
-            "description": "Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE \u2014 those are reserved for API-key callers. Body carries `detail.code = \"forbidden\"`.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
           }
         }
       },
@@ -125,7 +115,7 @@
         "tags": [
           "memories"
         ],
-        "summary": "List memories (cursor-paginated, flat-equality filters)",
+        "summary": "List memories",
         "description": "List memories with flat-equality filters and cursor pagination.",
         "operationId": "list_memories_v1_memories_get",
         "parameters": [
@@ -202,6 +192,24 @@
             "description": "Filter by app_id (exact match)."
           },
           {
+            "name": "group_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to rows tagged with this group id. Singular on list; the full DSL on `POST /v1/memories/search` supports multi-id `$in` filtering.",
+              "title": "Group Id"
+            },
+            "description": "Filter to rows tagged with this group id. Singular on list; the full DSL on `POST /v1/memories/search` supports multi-id `$in` filtering."
+          },
+          {
             "name": "type",
             "in": "query",
             "required": false,
@@ -248,13 +256,13 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 100,
+              "maximum": 500,
               "minimum": 1,
-              "description": "Maximum rows per page. 1\u2013100, default 50.",
+              "description": "Maximum rows per page. 1\u2013500, default 50.",
               "default": 50,
               "title": "Limit"
             },
-            "description": "Maximum rows per page. 1\u2013100, default 50."
+            "description": "Maximum rows per page. 1\u2013500, default 50."
           },
           {
             "name": "order",
@@ -313,7 +321,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key. Body carries `detail.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -350,8 +358,8 @@
         "tags": [
           "memories"
         ],
-        "summary": "Poll an ingest job",
-        "description": "Return the current state of an ingest job.\n\nTerminal states (``succeeded`` / ``failed``) are persisted in\nDynamoDB and remain queryable indefinitely under the current\ndeployment (the shared usage table has no table-level TTL\nenabled). ``result.memories_created`` and\n``result.memories_updated`` carry thin :class:`MemoryRef` entries\n(``{id, type, text}``) \u2014 fetch ``GET /v1/memories/{id}`` for the\nfull ``Memory`` shape. ``404 job_not_found`` still fires for\nunknown ids and for ids that exist under a different org.",
+        "summary": "Poll ingest job",
+        "description": "Return the current state of an ingest job.\n\nTerminal states (``succeeded`` / ``failed``) remain queryable\nafter the job completes. ``result.memories_created`` and\n``result.memories_updated`` carry thin references\n(``{id, type, text}``); fetch ``GET /v1/memories/{id}`` for the\nfull row. Returns ``404 job_not_found`` for unknown ids or ids\nbelonging to a different org.",
         "operationId": "get_ingest_job_v1_memories_jobs__job_id__get",
         "parameters": [
           {
@@ -396,7 +404,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key. Body carries `detail.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -433,19 +441,18 @@
         "tags": [
           "memories"
         ],
-        "summary": "Vector + filter search",
-        "description": "Vector + filter search over the unified memory pool.\n\nPR 4: org-wide vector search with cross-entity filtering. No\npartition lookup, no precedence-based store routing \u2014 Qdrant's\nindexed-payload intersection drives the candidate set, vector\nsimilarity ranks within it. Filters are the standard DSL\n(per-field exact equality, ``$in``/``$ne``/``$exists``/``$gte``/\n``$lte``, ``AND``/``OR``/``NOT``); ``type`` (or\n``type: {$in: [...]}``) restricts which kb_types participate.\nDefault = all three (mixed-type results merged by raw cosine).\n\n``include`` opts into composed output:\n\n- ``\"full_content\"`` \u2014 populate ``details.full_content`` on artifact\n  rows (no-op for facts/episodes).\n- ``\"context_prompt\"`` \u2014 run xmem's retrieval-agent pipeline;\n  assembled markdown lands under ``extras.context_prompt``,\n  latency breakdown under ``extras.stage_timings``. The agent\n  pipeline is conv-scoped, so this path requires ``conv_id`` in\n  ``filters``.",
+        "summary": "Agentic memory search",
+        "description": "Agentic search over the memory pool.\n\nPipeline: per-corpus vector retrieval \u2192 (``mode=compose`` only)\nLLM context selection. ``data: list[Memory]`` is always returned;\n``mode=compose`` additionally assembles a markdown block into\n``context: str``, while ``mode=retrieve`` stops after retrieval\nand leaves ``context`` null. Scope is enforced server-side from the\nrequest's scope axes (``user_id`` / ``group_ids`` / ``agent_id`` /\n``app_id``); no caller-supplied filter DSL.",
         "operationId": "search_memory_v1_memories_search_post",
-        "parameters": [],
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SearchRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -453,13 +460,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SearchListEnvelope"
+                  "$ref": "#/components/schemas/SearchResponse"
                 }
               }
             }
           },
-          "400": {
-            "description": "`detail.code = \"missing_user_id\"` or `\"missing_conv_id\"` \u2014 `include=context_prompt` was requested but the corresponding entity is absent from `filters` (the retrieval-agent pipeline needs both to construct the right cache namespace).",
+          "422": {
+            "description": "Validation error \u2014 invalid query, user_id, mode, or include.",
             "content": {
               "application/json": {
                 "schema": {
@@ -468,8 +475,8 @@
               }
             }
           },
-          "422": {
-            "description": "Validation error. Possible codes: `unsupported_include_option`, `cursor_mismatch`, `search_failed`, or Pydantic field validation.",
+          "500": {
+            "description": "`detail.code = \"search_failed\"` \u2014 store init, retrieval, or row-build failure.",
             "content": {
               "application/json": {
                 "schema": {
@@ -479,7 +486,152 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key. Body carries `detail.code = \"unauthorized\"`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/memories/trigger": {
+      "post": {
+        "tags": [
+          "memories"
+        ],
+        "summary": "Procedural-memory recall (pre-tool-call hook)",
+        "description": "Procedural-memory recall for a pre-tool-call hook.\n\nFires the symbol tripwire on the in-flight ``action`` (or explicit ``entities``)\nand returns the ``lesson``/``procedure`` insights past sessions recorded about\nthose symbols \u2014 advisory, not a mandate. ``data: list[Memory]`` carries the matched\nrows (``type: \"lesson\" | \"procedure\"``); ``mode=compose`` additionally runs an LLM\nrelevance gate over ``task`` and assembles a markdown block into ``context``, while\n``mode=retrieve`` returns the raw matched rows and leaves ``context`` null. Scope is\nenforced server-side from the request's scope axes (``user_id`` / ``group_ids`` /\n``agent_id`` / ``app_id``).\n\nUnlike ``POST /v1/memories/search``, this endpoint is **not** metered against the\nmonthly quota \u2014 the hook is meant to be called freely before every tool use.",
+        "operationId": "trigger_memory_v1_memories_trigger_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error \u2014 missing firing signal (`action`/`entities`), no scope axis, or invalid `include`/`mode`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`detail.code = \"trigger_failed\"` \u2014 auth resolution failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed. Missing / invalid API key. Body carries `detail.code = \"unauthorized\"`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate-limit or daily-cap exceeded. `Retry-After` and `RateLimit-*` response headers indicate when to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/memories/{memory_id}/revisions": {
+      "get": {
+        "tags": [
+          "memories"
+        ],
+        "summary": "Get revision chain",
+        "description": "Return the revision chain for a memory.\n\nFacts \u2192 supersede chain (oldest \u2192 newest).\nArtifacts \u2192 version chain (v1 \u2192 vN).\nEpisodes \u2192 single-element list (episodes have no revisions today).\n\nFull chain in one response. ``has_more`` is always ``false``;\ncursor envelope kept for shape consistency.",
+        "operationId": "get_memory_revisions_v1_memories__memory_id__revisions_get",
+        "parameters": [
+          {
+            "name": "memory_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Memory Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`detail.code = \"memory_not_found\"` \u2014 no row with that id under this org.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed. Missing / invalid API key. Body carries `detail.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -516,7 +668,7 @@
         "tags": [
           "memories"
         ],
-        "summary": "Get one memory by id",
+        "summary": "Get memory",
         "description": "Get one memory by id. Works for facts, artifacts, episodes.\nAlways returns the full representation \u2014 artifacts include\n``details.full_content``.",
         "operationId": "get_memory_by_id_v1_memories__memory_id__get",
         "parameters": [
@@ -562,7 +714,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key. Body carries `detail.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -597,9 +749,9 @@
         "tags": [
           "memories"
         ],
-        "summary": "Update a memory's text and/or metadata",
-        "description": "Update text and/or metadata.\n\n- ``text`` change \u2192 supersede (create a new ACTIVE fact pointing\n  back at the old one via ``supersedes``); fact-only operation.\n- ``metadata`` change \u2192 merge onto the existing payload in place\n  (works for any type).\n- Both \u2192 text supersede; the new revision carries the merged\n  metadata. The old revision keeps its original metadata.\n\nTrying to set an entity id / ``type`` / ``created_at`` via\n``metadata`` surfaces ``422 immutable_field``.",
-        "operationId": "patch_memory_v1_memories__memory_id__patch",
+        "summary": "Update memory group_ids",
+        "description": "Add or remove ``group_ids`` on a single memory \u2014 the sharing\naxis. Group tags control who can reach a row via\n``filters: {group_ids: <id>}`` on search / list, so this is how a\nmemory becomes shared (or un-shared) after ingest.\n\nScope is group tags only: ``text`` and the entity ids\n(``user_id`` / ``agent_id`` / ``conv_id`` / ``app_id``) are\nimmutable post-ingest and are not editable here. The operation is\nset-based and idempotent \u2014 re-sending the same patch is a no-op and\nskips the write entirely. See :class:`MemoryGroupPatchRequest` for\nthe full contract.",
+        "operationId": "patch_memory_group_ids_v1_memories__memory_id__patch",
         "parameters": [
           {
             "name": "memory_id",
@@ -616,14 +768,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpdateRequest"
+                "$ref": "#/components/schemas/MemoryGroupPatchRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "Updated. Returns the full memory with its new `group_ids`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -632,18 +784,8 @@
               }
             }
           },
-          "400": {
-            "description": "`detail.code = \"invalid_request\"` \u2014 empty PATCH body (neither `text` nor `metadata`).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
           "404": {
-            "description": "`detail.code = \"memory_not_found\"`.",
+            "description": "`detail.code = \"memory_not_found\"` \u2014 no readable row with that id under this org.",
             "content": {
               "application/json": {
                 "schema": {
@@ -653,7 +795,17 @@
             }
           },
           "422": {
-            "description": "Validation error. Possible codes: `immutable_field` (entity ids / `type` / `created_at` in `metadata`), `reserved_field` (internal storage key in `metadata`), `empty_text_field` (empty / whitespace-only `text`), or `invalid_request` (`text` patch on a non-fact row).",
+            "description": "`detail.code` is one of: `empty_patch` (neither list supplied), `contradictory_group_ids` (same id in both lists), `invalid_group_ids` (an added id is unknown or archived), or `invalid_request` (resulting tag count exceeds `MAX_GROUP_IDS_PER_INGEST`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`detail.code = \"patch_failed\"` \u2014 storage error writing the tags.",
             "content": {
               "application/json": {
                 "schema": {
@@ -663,7 +815,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key. Body carries `detail.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -681,26 +833,6 @@
                 }
               }
             }
-          },
-          "500": {
-            "description": "Server-side failure. Body carries `detail.code = \"server_error\"` with a stable error code; details are in the operator log, indexed by the `X-Request-Id` echoed in the response header.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE \u2014 those are reserved for API-key callers. Body carries `detail.code = \"forbidden\"`.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
           }
         }
       },
@@ -708,8 +840,8 @@
         "tags": [
           "memories"
         ],
-        "summary": "Delete a memory",
-        "description": "Delete a memory.\n\nFacts \u2192 soft delete (``tag2`` flipped to retracted; the row stays\nso supersede walkers can resolve it).\nArtifacts / episodes \u2192 hard delete (Qdrant point removed).",
+        "summary": "Delete memory",
+        "description": "Hard-delete a memory \u2014 fact, artifact, or episode.\n\nRemoves the record outright (no soft-delete / tombstone). A\ndeleted fact disappears from supersede chains; the revision walker\n(``GET /{id}/revisions``) tolerates the missing node and simply\nstops there. Idempotent: the first delete returns 204, subsequent\ndeletes return 404 (the record is gone, so the existence check\nbelow fails).",
         "operationId": "delete_memory_v1_memories__memory_id__delete",
         "parameters": [
           {
@@ -727,7 +859,7 @@
             "description": "Deleted. Subsequent DELETEs return 404 (idempotent contract)."
           },
           "404": {
-            "description": "`detail.code = \"memory_not_found\"` \u2014 unknown id, or a fact that was already soft-deleted (`tag2` is anything other than `active`).",
+            "description": "`detail.code = \"memory_not_found\"` \u2014 unknown id (or already deleted).",
             "content": {
               "application/json": {
                 "schema": {
@@ -737,7 +869,7 @@
             }
           },
           "500": {
-            "description": "`detail.code = \"delete_failed\"` \u2014 storage error on hard delete (artifacts / episodes).",
+            "description": "`detail.code = \"delete_failed\"` \u2014 storage error removing the point.",
             "content": {
               "application/json": {
                 "schema": {
@@ -757,7 +889,7 @@
             }
           },
           "401": {
-            "description": "Authentication failed. Missing / invalid API key or X-Org-Id. Body carries `detail.code = \"unauthorized\"`.",
+            "description": "Authentication failed. Missing / invalid API key. Body carries `detail.code = \"unauthorized\"`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -775,9 +907,99 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "summary": "Get usage",
+        "description": "Aggregate the org's memory usage for the current quota period \u2014 a\ncalendar month, or your billing period on plans that meter per billing\nperiod \u2014 plus a per-day breakdown if requested, plus an inline storage\nsnapshot.\n\n- ``operations`` totals ``messages_ingested`` / ``searches`` /\n  ``requests`` across every API key for the period.\n- ``quota.monthly`` pairs those totals against the plan caps\n  resolved from the org's subscription tier; ``limit: null`` means\n  the tier is uncapped (enterprise).\n- ``quota.rate_limit_req_per_min`` is the per-API-key request\n  ceiling enforced across all memory endpoints.",
+        "operationId": "get_usage_v1_usage_get",
+        "parameters": [
+          {
+            "name": "daily",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include the per-day ``daily[]`` array (one entry per calendar day in the period). Off by default to keep the response cheap; the dashboard chart opts in.",
+              "default": false,
+              "title": "Daily"
+            },
+            "description": "Include the per-day ``daily[]`` array (one entry per calendar day in the period). Off by default to keep the response cheap; the dashboard chart opts in."
           },
-          "403": {
-            "description": "Authenticated, but the caller is not permitted on this endpoint. Currently fires when a service-token (first-party portal) caller hits an ingest / PATCH / DELETE \u2014 those are reserved for API-key callers. Body carries `detail.code = \"forbidden\"`.",
+          {
+            "name": "by_api_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Include the per-API-key breakdown with each key's ``name`` / ``first_n`` display fields. Off by default \u2014 adds extra lookups.",
+              "default": false,
+              "title": "By Api Key"
+            },
+            "description": "Include the per-API-key breakdown with each key's ``name`` / ``first_n`` display fields. Off by default \u2014 adds extra lookups."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/groups": {
+      "post": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "Create group",
+        "description": "Register a new group on the org. Returns the persisted row\nincluding the server-generated `id`.",
+        "operationId": "create_group_v1_groups_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`detail.code = \"groups_quota_exceeded\"` \u2014 org is at `MAX_GROUPS_PER_ORG` active groups.",
             "content": {
               "application/json": {
                 "schema": {
@@ -787,11 +1009,456 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "List groups",
+        "description": "List groups for the calling org. Active-only by default.",
+        "operationId": "list_groups_v1_groups_get",
+        "parameters": [
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "When true, the response includes archived groups in addition to active ones. Default false \u2014 most callers only need the currently-taggable set.",
+              "default": false,
+              "title": "Include Archived"
+            },
+            "description": "When true, the response includes archived groups in addition to active ones. Default false \u2014 most callers only need the currently-taggable set."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupListEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/groups/{group_id}": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "Get group",
+        "operationId": "get_group_v1_groups__group_id__get",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`detail.code = \"group_not_found\"` \u2014 unknown id or id belonging to a different org.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "Update group",
+        "description": "Patch `name`, `prompt`, and/or `status`. Changing `prompt` does\nnot retroactively re-tag memory rows that were tagged under the\nprevious prompt.",
+        "operationId": "update_group_v1_groups__group_id__patch",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`detail.code = \"group_not_found\"`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`detail.code = \"invalid_request\"` \u2014 e.g. `status` set to a value other than `active` / `archived`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "Archive group",
+        "description": "Soft-delete: flips `status` to `archived`. The group row is\nretained so memory rows tagged with this id remain searchable;\nnew ingests reject the id with `422 group_archived`. Restore by\n`PATCH`ing `status` back to `active`. Idempotent.",
+        "operationId": "archive_group_v1_groups__group_id__delete",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`detail.code = \"group_not_found\"`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/webhooks": {
+      "put": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Set webhook config",
+        "description": "Create or replace the org's webhook config. Idempotent on `url` /\n`events` / `enabled`. The full signing `secret` is returned here \u2014\non first create, or whenever `rotate_secret=true`. Store it: `GET`\nonly ever returns it masked.",
+        "operationId": "put_webhook_v1_webhooks_put",
+        "parameters": [
+          {
+            "name": "rotate_secret",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "When true, mint a fresh signing secret even if a config already exists. Default false preserves the existing secret so an URL/events edit doesn't break the subscriber.",
+              "default": false,
+              "title": "Rotate Secret"
+            },
+            "description": "When true, mint a fresh signing secret even if a config already exists. Default false preserves the existing secret so an URL/events edit doesn't break the subscriber."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookConfig"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`detail.code = \"invalid_webhook_url\"` \u2014 URL is malformed, not https, or resolves to a non-public address. Or `\"invalid_request\"` \u2014 empty `events`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Get webhook config",
+        "description": "Read the org's current webhook config. The `secret` is masked \u2014\nthe full value is only ever shown at create / rotate time.",
+        "operationId": "get_webhook_v1_webhooks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookConfig"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`detail.code = \"webhook_not_found\"` \u2014 no config set for this org.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Delete webhook config",
+        "description": "Remove the org's webhook config. Idempotent \u2014 returns `204`\nwhether or not a config existed. Stops all deliveries for the org.",
+        "operationId": "delete_webhook_v1_webhooks_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
       }
     }
   },
   "components": {
     "schemas": {
+      "ActionContext": {
+        "properties": {
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool",
+            "description": "Tool / MCP name about to run (e.g. \"Edit\", \"linode_api\")."
+          },
+          "args": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Args",
+            "description": "Intended tool arguments (e.g. {\"file_path\": \"tool_loop.py\"})."
+          },
+          "output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output",
+            "description": "Most-recent tool output, if firing post-call."
+          }
+        },
+        "type": "object",
+        "title": "ActionContext",
+        "description": "The in-flight tool call the agent is touching \u2014 the firing signal for procedural\nrecall on ``POST /v1/memories/trigger``. The server extracts greppable identifiers\nfrom ``tool`` / ``args`` / ``output`` and matches them\nexactly against directives' ``trigger_entities``. At a pre-tool-call hook the\nhigh-value signal is ``tool`` + ``args`` (the intended call); ``output`` is for\nfiring off a just-returned result."
+      },
+      "ByApiKeyEntry": {
+        "properties": {
+          "api_key_hash": {
+            "type": "string",
+            "title": "Api Key Hash"
+          },
+          "first_n": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First N",
+            "description": "Display prefix of the API key."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "Human-readable label for the API key."
+          },
+          "messages_ingested": {
+            "type": "integer",
+            "title": "Messages Ingested",
+            "default": 0
+          },
+          "searches": {
+            "type": "integer",
+            "title": "Searches",
+            "default": 0
+          },
+          "requests": {
+            "type": "integer",
+            "title": "Requests",
+            "default": 0
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At",
+            "description": "Most recent ``updatedAt`` across this key's memory rollup rows for the period. ``None`` until the key has any usage."
+          }
+        },
+        "type": "object",
+        "required": [
+          "api_key_hash"
+        ],
+        "title": "ByApiKeyEntry",
+        "description": "One row in the ``by_api_key[]`` breakdown."
+      },
+      "DailyEntry": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "title": "Date",
+            "description": "Calendar day in ``YYYY-MM-DD`` form."
+          },
+          "messages_ingested": {
+            "type": "integer",
+            "title": "Messages Ingested",
+            "default": 0
+          },
+          "searches": {
+            "type": "integer",
+            "title": "Searches",
+            "default": 0
+          },
+          "requests": {
+            "type": "integer",
+            "title": "Requests",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "date"
+        ],
+        "title": "DailyEntry",
+        "description": "One row in the ``daily[]`` array \u2014 chart x-axis points."
+      },
       "ErrorDetail": {
         "properties": {
           "code": {
@@ -831,6 +1498,189 @@
         ],
         "title": "ErrorEnvelope",
         "description": "Standard error body for non-2xx responses raised by the memory\nAPI. Pydantic field-validation failures (422) use the FastAPI-\ndefault ``HTTPValidationError`` shape instead, where ``detail`` is\nan array of per-field error entries \u2014 switch on the response\nstatus code to pick the right shape."
+      },
+      "Group": {
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "group",
+            "title": "Object",
+            "description": "Constant discriminator for the resource type.",
+            "default": "group"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Stable group id of the form `grp_<32-hex-chars>`.",
+            "examples": [
+              "grp_a1b2c3d4e5f6071829304a5b6c7d8e9f"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Human-readable label."
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt",
+            "description": "Classifier criterion. Read by the ingest pipeline on every request that includes this group's id in `group_ids`. `null` marks a catch-all group: every extracted memory judged shareable (not personal) is tagged with it."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ],
+            "title": "Status",
+            "description": "`active` groups are tagged on new ingests. `archived` groups still surface on search (rows tagged with the id stay reachable) but the ingest classifier rejects them."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "ISO-8601 timestamp the group was registered."
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "date-time",
+            "title": "Updated At",
+            "description": "ISO-8601 timestamp of the most recent edit."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "created_at"
+        ],
+        "title": "Group",
+        "description": "Wire shape of a group. ``id`` is the opaque handle that goes\ninto ``IngestRequest.group_ids`` and into search ``filters``."
+      },
+      "GroupCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "description": "Human-readable label, shown in UI. Not used by the classifier.",
+            "examples": [
+              "Tokyo trip 2026"
+            ]
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt",
+            "description": "Free-text criterion the ingest classifier reads to decide whether an extracted memory belongs in this group. Describe what belongs, not how the classifier should behave. Omit (or send null) to make the group a catch-all: every extracted memory judged shareable (not personal) is tagged with it, with no per-group matching.",
+            "examples": [
+              "Facts about the Tokyo trip in May 2026: dates, flights, hotels, restaurants, dietary preferences for this trip."
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "GroupCreateRequest",
+        "description": "POST /v1/groups \u2014 register a new group.\n\nThe ``prompt`` is the instruction the ingest classifier reads on\nevery ingest to decide whether an extracted memory belongs in this\ngroup. Write it as a description of *what* belongs, not a chat\ninstruction \u2014 e.g. \"Facts about the Tokyo trip: dates, flights,\nhotels, dietary preferences for Tokyo\", not \"tag this if you think\nit should be tagged\".\n\nOmit ``prompt`` (or send ``null``) to create a catch-all group:\nevery extracted memory the classifier judges shareable (not\npersonal) is tagged with it \u2014 no per-group matching. Sending an\nempty string is still a 422; only omission/null means catch-all,\nso a blank field from a buggy client can't silently create one."
+      },
+      "GroupListEnvelope": {
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "list",
+            "title": "Object",
+            "description": "Constant discriminator for the resource type.",
+            "default": "list"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Group"
+            },
+            "type": "array",
+            "title": "Data",
+            "description": "All matching groups in the org."
+          }
+        },
+        "type": "object",
+        "title": "GroupListEnvelope",
+        "description": "Stripe-style list envelope. No cursor for now \u2014 group count is\nbounded by ``Settings.MAX_GROUPS_PER_ORG`` (default 100) so a\nsingle page is always sufficient."
+      },
+      "GroupUpdateRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "New name; leave null to keep existing."
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt",
+            "description": "New classifier prompt; leave null to keep existing. Does not retroactively re-tag existing memory rows. Setting a prompt on a catch-all group converts it to a prompted group going forward; a prompt can never be removed via PATCH (empty string is a 422)."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "archived"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status",
+            "description": "Set to `\"active\"` to un-archive a previously-archived group. The normal way to archive is `DELETE /v1/groups/{id}`."
+          }
+        },
+        "type": "object",
+        "title": "GroupUpdateRequest",
+        "description": "PATCH /v1/groups/{id} \u2014 partial update. Any field set to ``None``\nis left unchanged. Editing ``prompt`` does NOT retroactively re-tag\nexisting memory rows."
       },
       "HTTPValidationError": {
         "properties": {
@@ -1009,24 +1859,56 @@
             "title": "App Id",
             "description": "Optional app scope. Indexed alongside the other entity ids."
           },
-          "metadata": {
+          "timestamp_format": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Metadata",
-            "description": "Free-form customer metadata. Each key lands as its own indexed payload key, filterable on search. Reserved internal keys (`tag1`-`tag5`, `kb_type`, `org_id`, etc.) are stripped silently \u2014 see the `reserved_field` PATCH error for the list."
+            "title": "Timestamp Format",
+            "description": "Optional `strptime` format string used to parse each message's `date` field into a real timestamp on the batch-extraction path (e.g. `\"%Y-%m-%d %H:%M:%S\"`). When omitted, or when a `date` value fails to parse, the turn keeps its raw date string with no parsed timestamp. Only consulted on the batch path (message count above the live threshold); the live path ignores it.",
+            "examples": [
+              "%Y-%m-%d %H:%M:%S"
+            ]
           },
           "extract_artifacts": {
             "type": "boolean",
             "title": "Extract Artifacts",
-            "description": "When true, run the artifact-extraction stage in addition to fact + episode extraction. Off by default \u2014 most expensive stage and most callers don't need it. Setting this routes the request through the batch extraction path regardless of message count.",
+            "description": "When true, extracted artifacts are also stored and returned as `artifact` memories, in addition to fact + episode extraction. Off by default \u2014 most expensive stage and most callers don't need it. Routing (live vs batch) is unaffected and still chosen by message count.",
             "default": false
+          },
+          "agentic": {
+            "type": "boolean",
+            "title": "Agentic",
+            "description": "When true, ingest through the agentic (task-aware) path: recall-first extraction + a Stage-2 noise filter + agentic artifact detection + a structured session gist. Intended for tool-using / coding-agent transcripts. Off by default (conversational extraction).",
+            "default": false
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace",
+            "description": "Namespace this session belongs to \u2014 the working context, e.g. a coding agent's repo, a support agent's customer account, an ops agent's service. Captured `lesson`/`procedure` directives are written under it, so recall with the same `namespace` (see `POST /v1/memories/trigger`) surfaces them there instead of in every context. Directives ingested without one are global. Unrelated to the tenancy axes (`user_id`/`agent_id`/`group_ids`).",
+            "examples": [
+              "MemHub-Backend"
+            ]
+          },
+          "group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Group Ids",
+            "description": "Optional list of group ids the client wants associated with this ingest. Each id must be a registered group on the org (see `POST /v1/groups`). Ids that are unknown or archived are dropped silently and echoed back in `result.ignored_group_ids` \u2014 a single stale id will not fail the ingest, since the chat path tolerates partial tagging better than a hard reject. After extraction, a classifier judges each memory personal-vs-shareable: personal memories are never group-tagged (they stay in the author's personal scope); shareable memories are tagged with every prompt-less (catch-all) group in the valid subset, plus whichever prompted groups the classifier matched. Tagged rows become reachable via `filters: {group_ids: <id>}` on search. The capped length is `MAX_GROUP_IDS_PER_INGEST`."
           }
         },
         "type": "object",
@@ -1036,7 +1918,7 @@
           "conv_id"
         ],
         "title": "IngestRequest",
-        "description": "POST /v1/memories \u2014 async ingest from a message list.\n\nRequired entities: ``user_id`` and ``conv_id``. ``user_id`` keys\nxmem's per-user session-cache namespace (one ``MultiKBSet`` per\n``(org, user)``, so a user's facts accumulate in one place rather\nthan fragmenting per-conversation). ``conv_id`` anchors every\nextracted memory to a conversation for replay, export, and bulk\nretract. ``agent_id`` and ``app_id`` remain optional \u2014 set either,\nboth, or neither. There is no auto-default ``app_id`` rule.\n\n``extract_artifacts`` opts in to the artifact-extraction stage\n(off by default \u2014 most expensive stage and most callers don't\nneed it). Episodes are always extracted (conv_id is now\nguaranteed). Facts are always extracted. (Per SoT decision #4.)\n\nThere is no client-facing pipeline hint: the server picks live\nvs batch by ``len(messages)`` (SoT decision #4 + Settings\nthreshold)."
+        "description": "POST /v1/memories \u2014 async ingest from a message list.\n\nRequired entities: ``user_id`` and ``conv_id``. ``user_id`` scopes\na user's per-user memory namespace, so a user's facts accumulate in\none place rather than fragmenting per-conversation. ``conv_id``\nanchors every extracted memory to a conversation for replay, export,\nand bulk retract. ``agent_id`` and ``app_id`` remain optional \u2014 set\neither, both, or neither. There is no auto-default ``app_id`` rule.\n\n``extract_artifacts`` opts in to the artifact-extraction stage\n(off by default \u2014 the most expensive stage and most callers don't\nneed it). Episodes are always extracted (``conv_id`` is\nguaranteed). Facts are always extracted.\n\nThere is no client-facing pipeline hint: the server selects its\nextraction strategy automatically based on the number of messages."
       },
       "IngestResult": {
         "properties": {
@@ -1078,6 +1960,14 @@
             "type": "object",
             "title": "Stage Timings",
             "description": "Per-stage extraction latencies (seconds)."
+          },
+          "ignored_group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ignored Group Ids",
+            "description": "Subset of the request's `group_ids` that the server dropped because the id was unknown or archived. Empty on the common path. Lets clients self-correct stale caches without having to re-issue the ingest."
           }
         },
         "type": "object",
@@ -1143,10 +2033,12 @@
             "enum": [
               "fact",
               "artifact",
-              "episode"
+              "episode",
+              "lesson",
+              "procedure"
             ],
             "title": "Type",
-            "description": "Memory subtype. `fact` = a single semantic claim extracted from a turn; `artifact` = a structured object (code, doc, image) referenced by the conversation; `episode` = a session-scoped summary of a stretch of turns."
+            "description": "Memory subtype. `fact` = a single semantic claim extracted from a turn; `artifact` = a structured object (code, doc, image) referenced by the conversation; `episode` = a session-scoped summary of a stretch of turns; `lesson` / `procedure` = a situated directive recalled by the symbol tripwire (see `DirectiveDetails`)."
           },
           "text": {
             "type": "string",
@@ -1201,11 +2093,13 @@
             "title": "App Id",
             "description": "App scope, if any."
           },
-          "metadata": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Metadata",
-            "description": "Free-form customer-supplied metadata that was on the row at write time. Each key here is independently indexed and filterable on search."
+          "group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Group Ids",
+            "description": "Group ids associated with this row \u2014 the sharing axis. Stamped at ingest time and editable afterward via `PATCH /v1/memories/{id}` (`add_group_ids` / `remove_group_ids`). Reachable as a filter axis via `filters: {group_ids: <id>}` or `{group_ids: {\"$in\": [<id>, ...]}}`."
           },
           "categories": {
             "items": {
@@ -1213,7 +2107,7 @@
             },
             "type": "array",
             "title": "Categories",
-            "description": "Optional category labels from xmem's extraction pipeline."
+            "description": "Optional category labels from the extraction pipeline."
           },
           "score": {
             "anyOf": [
@@ -1251,7 +2145,7 @@
             ],
             "format": "date-time",
             "title": "Updated At",
-            "description": "ISO-8601 timestamp of the last metadata patch / supersede."
+            "description": "ISO-8601 timestamp of the last supersede / consolidation."
           },
           "details": {
             "oneOf": [
@@ -1263,9 +2157,11 @@
               },
               {
                 "$ref": "#/components/schemas/EpisodeDetails"
+              },
+              {
+                "$ref": "#/components/schemas/DirectiveDetails"
               }
             ],
-            "additionalProperties": true,
             "type": "object",
             "title": "Details",
             "description": "Type-specific extension. Shape depends on `type` \u2014 see `FactDetails` / `ArtifactDetails` / `EpisodeDetails` schemas. Always an object; never null."
@@ -1278,7 +2174,68 @@
           "text"
         ],
         "title": "Memory",
-        "description": "Unified memory resource \u2014 facts, artifacts, episodes marshal to\nthis shape. ``type`` is the discriminator; ``details`` is the\ntype-specific extension.\n\nThe mem0-parity invariant: ``text`` is always a short readable\npreview, regardless of type (fact statement / artifact summary /\nepisode summary)."
+        "description": "Unified memory resource \u2014 facts, artifacts, episodes marshal to\nthis shape. ``type`` is the discriminator; ``details`` is the\ntype-specific extension.\n\nInvariant: ``text`` is always a short readable preview, regardless\nof type (fact statement / artifact summary / episode summary)."
+      },
+      "MemoryGroupPatchRequest": {
+        "properties": {
+          "add_group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Add Group Ids",
+            "description": "Group ids to add to the row. Each must be an active group on the org. Ids already present are ignored (no duplicates). Blank entries are trimmed away.",
+            "examples": [
+              [
+                "grp_eng",
+                "grp_oncall"
+              ]
+            ]
+          },
+          "remove_group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Remove Group Ids",
+            "description": "Group ids to remove from the row. Ids not currently on the row are ignored. Not validated against the group registry, so an archived group's tag can still be removed.",
+            "examples": [
+              [
+                "grp_personal"
+              ]
+            ]
+          }
+        },
+        "type": "object",
+        "title": "MemoryGroupPatchRequest",
+        "description": "``PATCH /v1/memories/{id}`` \u2014 add or remove ``group_ids`` on an\nexisting memory row.\n\nScope is intentionally narrow: this endpoint mutates the row's\ngroup tags only \u2014 the *sharing* axis. It does not edit ``text`` or\nany entity id (``user_id`` / ``agent_id`` / ``conv_id`` /\n``app_id``); those are immutable once ingested.\n\nSemantics are set-based and order-independent \u2014 ``group_ids`` is an\nunordered set of tags. Adding an id already present is a no-op, and\nremoving an id that isn't there is a no-op, so the whole operation\nis idempotent and safe to retry. ``remove`` is applied before\n``add``; the same id may not appear in both lists (``422\ncontradictory_group_ids``). At least one list must be non-empty\n(``422 empty_patch``).\n\nEvery id in ``add_group_ids`` must be an **active** group on the\norg (see ``POST /v1/groups``); an unknown or archived id is\nrejected with ``422 invalid_group_ids``. ``remove_group_ids`` is\n*not* validated against the registry \u2014 a tag can always be removed,\nincluding one whose group was archived after it was applied."
+      },
+      "MemoryMonthlyQuota": {
+        "properties": {
+          "period_key": {
+            "type": "string",
+            "title": "Period Key",
+            "description": "Identifier for the current quota period \u2014 ``YYYY-MM`` for a calendar month, or the period's start date ``YYYY-MM-DD`` for a billing period."
+          },
+          "resets_at": {
+            "type": "string",
+            "title": "Resets At",
+            "description": "ISO-8601 UTC instant when the quota counters reset (the start of the next calendar month, or the end of the current billing period)."
+          },
+          "messages_ingested": {
+            "$ref": "#/components/schemas/QuotaCounter"
+          },
+          "searches": {
+            "$ref": "#/components/schemas/QuotaCounter"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period_key",
+          "resets_at"
+        ],
+        "title": "MemoryMonthlyQuota",
+        "description": "Quota state for the current period \u2014 a calendar month, or your billing\nperiod on plans that meter per billing period."
       },
       "MemoryRef": {
         "properties": {
@@ -1310,7 +2267,7 @@
           "text"
         ],
         "title": "MemoryRef",
-        "description": "Thin reference to a memory row written or updated by an ingest\njob. Carries only what a client needs for confirmation / per-type\nrouting; the full ``Memory`` shape (entity ids, metadata, details,\ntimestamps, categories) is one ``GET /v1/memories/{id}`` away.\n\nTrade-off rationale: storing the full ``Memory`` shape inside the\nDDB job row duplicates content that already lives in Qdrant \u2014\nevery field except ``id`` is derivable via the read endpoints.\nThe thin shape keeps the row small while preserving the two\nfields that make a poll response useful on its own: ``type``\n(lets clients route per memory subtype without a follow-up) and\n``text`` (the human-readable preview, makes the result usable as\na confirmation receipt)."
+        "description": "Thin reference to a memory row written or updated by an ingest\njob. Carries only what a client needs for confirmation / per-type\nrouting; the full ``Memory`` shape (entity ids, details,\ntimestamps, categories) is one ``GET /v1/memories/{id}`` away.\n\nTrade-off rationale: storing the full ``Memory`` shape inside the\njob record duplicates content that is already persisted \u2014 every\nfield except ``id`` is derivable via the read endpoints. The thin\nshape keeps the record small while preserving the two fields that\nmake a poll response useful on its own: ``type``\n(lets clients route per memory subtype without a follow-up) and\n``text`` (the human-readable preview, makes the result usable as\na confirmation receipt)."
       },
       "Message": {
         "properties": {
@@ -1365,129 +2322,120 @@
         "title": "Message",
         "description": "One chat-style turn in an ingest payload. Order matters: facts\nand episodes are extracted by walking adjacent user\u2192assistant\npairs (the live path) or the full sequence (the batch path)."
       },
-      "SearchExtras": {
+      "Operations": {
         "properties": {
-          "context_prompt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Context Prompt",
-            "description": "Assembled markdown context block from xmem's retrieval agent. Populated only when `include` contained `context_prompt`; null otherwise."
+          "messages_ingested": {
+            "type": "integer",
+            "title": "Messages Ingested",
+            "description": "Chat messages ingested via POST /v1/memories \u2014 the sum of payload message counts, not request count and not the memories extracted from them.",
+            "default": 0
           },
-          "stage_timings": {
-            "additionalProperties": {
-              "type": "number"
-            },
-            "type": "object",
-            "title": "Stage Timings",
-            "description": "Per-stage retrieval-pipeline latencies (seconds)."
+          "searches": {
+            "type": "integer",
+            "title": "Searches",
+            "description": "POST /v1/memories/search calls (one search per call).",
+            "default": 0
+          },
+          "requests": {
+            "type": "integer",
+            "title": "Requests",
+            "description": "Total metered memory API calls (ingest + search).",
+            "default": 0
           }
         },
         "type": "object",
-        "title": "SearchExtras",
-        "description": "Search-response extras populated when ``include`` opts in to\ncomposed output. ``stage_timings`` is always populated on a\ncontext_prompt response (latency breakdown of the retrieval\npipeline)."
+        "title": "Operations",
+        "description": "Period-total memory operation counters for the org."
       },
-      "SearchListEnvelope": {
+      "Period": {
         "properties": {
-          "object": {
+          "key": {
             "type": "string",
-            "const": "list",
-            "title": "Object",
-            "description": "Constant discriminator for the resource type.",
-            "default": "list"
+            "title": "Key",
+            "description": "Period identifier \u2014 ``YYYY-MM`` for ``calendar_month``, or the period's start date ``YYYY-MM-DD`` for ``billing_period``."
           },
-          "data": {
-            "items": {
-              "$ref": "#/components/schemas/Memory"
-            },
-            "type": "array",
-            "title": "Data",
-            "description": "Ranked rows. Mixed kb_types are merged by raw cosine; `score` carries the similarity value."
+          "start": {
+            "type": "string",
+            "title": "Start"
           },
-          "has_more": {
-            "type": "boolean",
-            "title": "Has More",
-            "default": false
+          "end": {
+            "type": "string",
+            "title": "End"
           },
-          "next_cursor": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+          "type": {
+            "type": "string",
+            "enum": [
+              "calendar_month",
+              "billing_period"
             ],
-            "title": "Next Cursor"
-          },
-          "extras": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SearchExtras"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Populated only when `include` opts in. `null` on a default search response."
+            "title": "Type",
+            "default": "calendar_month"
           }
         },
         "type": "object",
-        "title": "SearchListEnvelope",
-        "description": "Search response \u2014 list envelope + optional ``extras`` block."
+        "required": [
+          "key",
+          "start",
+          "end"
+        ],
+        "title": "Period"
+      },
+      "Quota": {
+        "properties": {
+          "rate_limit_req_per_min": {
+            "type": "integer",
+            "title": "Rate Limit Req Per Min",
+            "description": "Per-API-key request ceiling across all memory endpoints."
+          },
+          "monthly": {
+            "$ref": "#/components/schemas/MemoryMonthlyQuota"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rate_limit_req_per_min",
+          "monthly"
+        ],
+        "title": "Quota"
+      },
+      "QuotaCounter": {
+        "properties": {
+          "used": {
+            "type": "integer",
+            "title": "Used",
+            "description": "Consumed so far in the current quota period.",
+            "default": 0
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit",
+            "description": "Cap for the org's plan; ``null`` = unlimited (enterprise)."
+          }
+        },
+        "type": "object",
+        "title": "QuotaCounter",
+        "description": "One metered quota dimension: amount used vs the plan cap."
       },
       "SearchRequest": {
         "properties": {
           "query": {
             "type": "string",
+            "maxLength": 4000,
             "minLength": 1,
             "title": "Query",
-            "description": "Natural-language query text. Embedded server-side; cosine-similarity-ranked.",
+            "description": "Natural-language query text. Embedded server-side; the search pipeline ranks and selects.",
             "examples": [
               "who likes thai food?"
             ]
           },
-          "filters": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Filters",
-            "description": "Filter DSL. Top-level keys are implicit-AND. Supported operators on per-field values: bare value, `null`, `$eq`, `$ne`, `$in`, `$nin`, `$exists`, `$gt`/`$gte`/`$lt`/`$lte`, `$between`. Boolean composition: `AND` / `OR` / `NOT`. `type` (string or `$in` list) restricts which kb_types are scanned (default = all three).",
-            "examples": [
-              {
-                "user_id": "alice"
-              },
-              {
-                "AND": [
-                  {
-                    "user_id": "alice"
-                  },
-                  {
-                    "agent_id": "bot-7"
-                  }
-                ]
-              },
-              {
-                "score_val": {
-                  "$gte": 0.5
-                },
-                "type": "fact"
-              }
-            ]
-          },
-          "limit": {
-            "type": "integer",
-            "maximum": 100.0,
-            "minimum": 1.0,
-            "title": "Limit",
-            "description": "Maximum rows to return. 1\u2013100, default 20.",
-            "default": 20
-          },
-          "cursor": {
+          "user_id": {
             "anyOf": [
               {
                 "type": "string"
@@ -1496,20 +2444,78 @@
                 "type": "null"
               }
             ],
-            "title": "Cursor",
-            "description": "Opaque pagination cursor from a previous response's `next_cursor`. Tenant-scoped \u2014 using one from another org returns 422 `cursor_mismatch`."
+            "title": "User Id",
+            "description": "Scope key. When supplied, baked into the per-request store as an AND pin so reads are tenant-isolated at the vector-store filter layer. **Optional** on search (unlike ingest): omit it and pass ``group_ids`` to read a shared group across users. At least one of ``user_id`` / ``agent_id`` / ``app_id`` / ``group_ids`` is required. The compat shim also accepts it inside legacy ``filters.user_id`` and lifts it before field validation runs, so old SDKs that send the pre-#68 wire shape don't 422.",
+            "examples": [
+              "user-123"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "retrieve",
+              "compose"
+            ],
+            "title": "Mode",
+            "description": "Pipeline depth selector.\n\n- `compose` (default) \u2014 vector retrieval **plus** an LLM context-selection step that picks the most relevant subset, then assembles it into a markdown block. `data` carries the selected rows; `context` carries the assembled markdown. One LLM call.\n- `retrieve` \u2014 vector retrieval only. No LLM, no agent, cheaper and faster. `data` carries the raw ranked candidates (the unfiltered set); `context` is null.\n\n`data` is populated in both modes; under `compose` it's the LLM-selected subset, under `retrieve` it's the raw candidate set.",
+            "default": "compose"
           },
           "include": {
             "items": {
               "type": "string",
               "enum": [
-                "full_content",
-                "context_prompt"
+                "fact",
+                "artifact",
+                "episode"
               ]
             },
             "type": "array",
+            "uniqueItems": true,
             "title": "Include",
-            "description": "Opt-in extras. `full_content` populates `details.full_content` on artifact rows (no-op for facts/episodes). `context_prompt` runs xmem's retrieval-agent pipeline; the assembled markdown lands under `extras.context_prompt` and requires both `user_id` and `conv_id` in `filters`."
+            "description": "Which corpora to search. Subset to restrict \u2014 e.g. `[\"fact\"]` for facts-only. Default is all three."
+          },
+          "group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Group Ids",
+            "description": "Optional group tags \u2014 another AND scope axis. When non-empty, candidate rows must be tagged to at least one of the requested group(s):\n\n  `org [ AND user_id ] AND ( group_ids \u2229 <group_ids> ) [ AND agent_id ] [ AND app_id ]`\n\nGroup membership (the `\u2229`) is OR / any-of across the list \u2014 pass `[trip_tokyo, trip_paris]` to span both trips.\n\nHow it composes with `user_id` (\"scope by what you pass\"):\n\n- **omit `user_id`, pass `group_ids`** \u2014 the cross-user whole-group read: every user's rows tagged to those group(s). A traveler's AI sees the whole trip's shared facts, from any traveler.\n- **pass both `user_id` and `group_ids`** \u2014 the intersection: only the caller's own rows that are also tagged to those group(s) (the caller's slice of the group).\n\n(`agent_id` / `app_id` AND on top when set \u2014 they narrow further.) Group ids are server-generated unguessable handles (see `POST /v1/groups`), so knowing the id is the access boundary; other users' *untagged* memories never surface.",
+            "examples": [
+              [
+                "grp_a1b2c3d4e5f6071829304a5b6c7d8e9f"
+              ]
+            ]
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id",
+            "description": "Optional agent scope. When set, ANDs onto the active primary scope (whether that's `user_id` or `group_ids`): candidate rows must also carry this exact `agent_id`. Use it to narrow a search to one agent's contributions. Indexed payload key, same axis ingest stamps.",
+            "examples": [
+              "bot-7"
+            ]
+          },
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Id",
+            "description": "Optional app scope. When set, ANDs onto the active primary scope (like `agent_id`): candidate rows must also carry this exact `app_id`. Indexed payload key, same axis ingest stamps.",
+            "examples": [
+              "app-3"
+            ]
           }
         },
         "type": "object",
@@ -1517,11 +2523,35 @@
           "query"
         ],
         "title": "SearchRequest",
-        "description": "POST /v1/memories/search \u2014 vector + filter search over the\nunified memory pool. No ``mode`` flag; opt into composed output\nvia ``include``.\n\n``filters`` is the full DSL (bare values, ``$in``/``$ne``/``$gte``/\n``$lte``, ``AND``/``OR``/``NOT``). Empty/omitted filters mean\n\"all memories in this org\"."
+        "description": "POST /v1/memories/search \u2014 agentic memory search.\n\nThe pipeline has two phases:\n\n1. **Retrieve** \u2014 embed the query, fetch per-corpus vector\n   candidates, optionally rerank. Output: a ranked set of\n   :class:`Memory` rows.\n2. **Compose** *(only when ``mode='compose'``)* \u2014 an LLM\n   context-selection step picks the most relevant subset of the\n   candidates and weaves them into a markdown block ready to drop\n   into an LLM prompt.\n\n``mode`` toggles whether phase 2 runs:\n\n- ``\"compose\"`` (default) \u2192 ``data`` populated with rows **and**\n  ``context`` populated with the assembled markdown. The dominant\n  use case (memory search \u2192 LLM prompt) gets the prompt-ready\n  blob without an opt-in.\n- ``\"retrieve\"`` \u2192 ``data`` populated, ``context`` null. Skips\n  the LLM compose step (cheaper, faster); for callers building\n  their own UI or doing custom downstream processing.\n\nScope is enforced server-side by the per-request store and\nfollows \"scope by what you\npass\": every scope axis you supply ANDs; an axis you omit is left\nunconstrained. ``org_id`` is derived server-side from your API key. At least one of\n``user_id`` / ``agent_id`` / ``app_id`` / ``group_ids`` must be\nsupplied \u2014 an unscoped org-wide search is rejected. ``user_id`` is\noptional here (unlike ingest, where it is required): omit it and\npass ``group_ids`` to read a shared group across users. No filter\nDSL \u2014 the four scope axes are the only narrowing.\n\n**Legacy compatibility** (undocumented in the public spec, kept\nso existing SDK installations don't break):\n\n- ``filters: {user_id: \"X\", ...}`` \u2014 accepted; ``user_id`` is\n  lifted out of ``filters`` if absent at the body root. Other\n  filter keys are silently dropped (the new shape doesn't support\n  a general filter DSL).\n- ``mode: \"rows\"`` \u2192 translated to ``\"retrieve\"``.\n- ``mode: \"context\"`` \u2192 translated to ``\"compose\"``.\n- ``include: [\"context_prompt\"]`` \u2192 sets ``mode=\"compose\"`` and\n  drops the value. ``\"full_content\"`` is dropped silently.\n\nThese translations are intentionally invisible on the wire \u2014 the\npublic spec only advertises the new shape \u2014 and will be removed\nonce consumers have migrated."
       },
-      "UpdateRequest": {
+      "SearchResponse": {
         "properties": {
-          "text": {
+          "object": {
+            "type": "string",
+            "const": "search",
+            "title": "Object",
+            "description": "Constant discriminator for the resource type.",
+            "default": "search"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "retrieve",
+              "compose"
+            ],
+            "title": "Mode",
+            "description": "Echoes the request's mode. `compose` \u21d2 both `data` and `context` populated; `retrieve` \u21d2 `data` populated and `context` null."
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Memory"
+            },
+            "type": "array",
+            "title": "Data",
+            "description": "Ranked Memory rows from retrieval. Populated for both modes. Semantic rows (`fact`/`artifact`/`episode`) are ordered by `score` desc; when `include` requests `lesson`/`procedure`, those directive rows are precision-gated (not vector-scored, `score` is null) and lead the list ahead of the semantic rows. For `mode=compose`, the semantic rows are the candidates considered by the context-selection step \u2014 a (possibly larger) superset of what ended up in `context`."
+          },
+          "context": {
             "anyOf": [
               {
                 "type": "string"
@@ -1530,26 +2560,289 @@
                 "type": "null"
               }
             ],
-            "title": "Text",
-            "description": "New fact text. When provided, supersedes the existing fact: a new ACTIVE row is created pointing back at the old one via `supersedes`, the old row's `tag2` flips to superseded. Fact-only \u2014 sending `text` on an artifact or episode row returns 422. Empty / whitespace-only values return 422 `empty_text_field`."
+            "title": "Context",
+            "description": "Assembled markdown context block ready for prompt insertion. Populated only when `mode=compose`; null otherwise."
           },
-          "metadata": {
+          "stage_timings": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Stage Timings",
+            "description": "Per-stage retrieval-pipeline latencies (seconds). Populated in both modes."
+          },
+          "context_selection_applied": {
+            "type": "boolean",
+            "title": "Context Selection Applied",
+            "description": "True when the LLM context-selection step ran. False indicates the pipeline fell through (e.g. an empty candidate pool, or context selection disabled by config).",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "title": "SearchResponse",
+        "description": "POST /v1/memories/search response.\n\n``data`` is **always** populated \u2014 both modes return the ranked\nMemory rows from retrieval. ``context`` is populated **only when\n``mode='compose'``** with the assembled markdown block from the\nLLM context-selection step. ``stage_timings`` is always present\nfor per-stage latency attribution.\n\nNote that under ``mode='compose'`` the rows in ``data`` are the\n**retrieval candidates** \u2014 a possibly larger set than the subset\nthe LLM selected and wove into ``context``. Useful for showing\n\"everything we found\" alongside \"what we sent to the model.\""
+      },
+      "StorageSnapshot": {
+        "properties": {
+          "memories_active": {
+            "type": "integer",
+            "title": "Memories Active",
+            "default": 0
+          },
+          "episodes_active": {
+            "type": "integer",
+            "title": "Episodes Active",
+            "default": 0
+          },
+          "artifacts_active": {
+            "type": "integer",
+            "title": "Artifacts Active",
+            "default": 0
+          },
+          "as_of": {
+            "type": "string",
+            "title": "As Of"
+          }
+        },
+        "type": "object",
+        "required": [
+          "as_of"
+        ],
+        "title": "StorageSnapshot",
+        "description": "Currently-active per-type row counts.\n\nCached harder than operations (computing the counts is expensive);\n``as_of`` reflects the mint time of the cached snapshot and may\nlag the response-level ``as_of``."
+      },
+      "TriggerRequest": {
+        "properties": {
+          "action": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/ActionContext"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Metadata",
-            "description": "Customer metadata to merge onto the row. Keys present here replace same-named keys on the existing row; keys absent here are left untouched (no key deletion via PATCH). Setting an immutable field (entity ids, `type`, `created_at`) returns 422 `immutable_field`; setting an internal storage key (`tag1`-`tag5`, `kb_type`, etc.) returns 422 `reserved_field`."
+            "description": "The in-flight tool call the agent is touching right now \u2014 the firing signal for recall. Greppable identifiers are extracted server-side (`tool` name, `args` values, optional `output`) and matched exactly against directives' `trigger_entities`. Supply this or `entities`."
+          },
+          "entities": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entities",
+            "description": "Escape hatch: pre-extracted greppable identifiers to fire on, bypassing server-side extraction from `action`. Use when the client already knows the exact symbols the agent is touching.",
+            "examples": [
+              [
+                "tool_loop.py",
+                "AbortError"
+              ]
+            ]
+          },
+          "include": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "lesson",
+                "procedure"
+              ]
+            },
+            "type": "array",
+            "uniqueItems": true,
+            "title": "Include",
+            "description": "Which procedural corpora to recall. Defaults to both (`lesson`/`procedure`); subset to restrict (e.g. `[\"lesson\"]`)."
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace",
+            "description": "Namespace the agent is working in right now \u2014 repo, customer account, service (whatever was passed at ingest). Narrows recall to directives learned under that namespace **plus global ones** (ingested with no namespace) \u2014 it never hides global directives, so it is always safe to pass. Unrelated to the tenancy axes.",
+            "examples": [
+              "MemHub-Backend"
+            ]
+          },
+          "task": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task",
+            "description": "The agent's current goal, in one line. Fed to the relevance gate under `mode=compose` so it keeps only the insights that help with THIS task.",
+            "examples": [
+              "fix finalize-on-abort in the tool loop"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "retrieve",
+              "compose"
+            ],
+            "title": "Mode",
+            "description": "Pipeline depth selector.\n\n- `compose` (default) \u2014 symbol-tripwire recall **plus** an LLM relevance-gate step that keeps only the insights relevant to `task`, then assembles a markdown block. `data` carries the gated rows; `context` carries the markdown. One LLM call.\n- `retrieve` \u2014 recall only. No LLM, cheaper and faster. `data` carries the matched rows; `context` is null.",
+            "default": "compose"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id",
+            "description": "Scope key. When supplied, applied as an AND pin so reads are tenant-isolated at the storage filter layer. Optional: omit it and pass `group_ids` to read a shared group across users. At least one of `user_id` / `agent_id` / `app_id` / `group_ids` is required.",
+            "examples": [
+              "user-123"
+            ]
+          },
+          "group_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Group Ids",
+            "description": "Optional group tags \u2014 another AND scope axis. When non-empty, matched rows must be tagged to at least one of the requested group(s). Group ids are server-generated unguessable handles (see `POST /v1/groups`); knowing the id is the access boundary.",
+            "examples": [
+              [
+                "grp_a1b2c3d4e5f6071829304a5b6c7d8e9f"
+              ]
+            ]
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id",
+            "description": "Optional agent scope. When set, ANDs onto the active primary scope (whether that's `user_id` or `group_ids`): matched rows must also carry this exact `agent_id`.",
+            "examples": [
+              "bot-7"
+            ]
+          },
+          "app_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Id",
+            "description": "Optional app scope. When set, ANDs onto the active primary scope (like `agent_id`): matched rows must also carry this exact `app_id`.",
+            "examples": [
+              "app-3"
+            ]
           }
         },
         "type": "object",
-        "title": "UpdateRequest",
-        "description": "PATCH /v1/memories/{id} \u2014 update text and/or metadata.\n\nMetadata is merged onto the existing payload, not replaced.\nImmutable fields (``type``, entity ids, ``created_at``) cannot be\nchanged via this endpoint; attempting to set them surfaces\n``422 immutable_field``."
+        "title": "TriggerRequest",
+        "description": "POST /v1/memories/trigger \u2014 procedural-memory recall for a pre-tool-call hook.\n\nAn agent calls this right before (or just after) a tool runs to pull the\n``lesson``/``procedure`` insights that past sessions recorded about the symbols\nit's touching \u2014 what worked, what didn't. Recall fires on the symbol tripwire,\nnever a semantic query: the server extracts greppable identifiers from ``action``\n(``tool`` / ``args`` / ``output``) or takes them\nstraight from ``entities``, and matches them exactly against directives'\n``trigger_entities``.\n\nWhat comes back is advisory, not a mandate \u2014 ranked :class:`Memory` rows\n(``type: \"lesson\" | \"procedure\"``) in the shared :class:`SearchResponse`, with the\nassembled markdown in ``context`` under ``mode=\"compose\"``.\n\nScope follows \"scope by what you pass\": every axis you supply ANDs; ``org_id``\nis derived server-side from your API key. At least one of ``user_id`` / ``agent_id`` / ``app_id`` /\n``group_ids`` is required \u2014 an unscoped org-wide recall is rejected."
+      },
+      "UsageResponse": {
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "usage",
+            "title": "Object",
+            "default": "usage"
+          },
+          "as_of": {
+            "type": "string",
+            "title": "As Of",
+            "description": "When this snapshot was computed."
+          },
+          "period": {
+            "$ref": "#/components/schemas/Period"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier",
+            "description": "The org's subscription tier; ``None`` if unset."
+          },
+          "operations": {
+            "$ref": "#/components/schemas/Operations"
+          },
+          "daily": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/DailyEntry"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily",
+            "description": "``None`` when ``?daily=false`` (default); populated when ``?daily=true``."
+          },
+          "by_api_key": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ByApiKeyEntry"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By Api Key",
+            "description": "``None`` when ``?by_api_key=false`` (default); populated when ``?by_api_key=true``."
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageSnapshot"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/Quota"
+          }
+        },
+        "type": "object",
+        "required": [
+          "as_of",
+          "period",
+          "storage",
+          "quota"
+        ],
+        "title": "UsageResponse",
+        "description": "Top-level shape for ``GET /v1/usage``."
       },
       "ValidationError": {
         "properties": {
@@ -1584,8 +2877,124 @@
         ],
         "title": "ValidationError"
       },
+      "WebhookConfig": {
+        "properties": {
+          "object": {
+            "type": "string",
+            "const": "webhook",
+            "title": "Object",
+            "description": "Constant discriminator for the resource type.",
+            "default": "webhook"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Configured subscriber URL."
+          },
+          "events": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "memory.learning.completed",
+                "memory.learning.failed"
+              ]
+            },
+            "type": "array",
+            "title": "Events",
+            "description": "Event types currently subscribed."
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "Whether deliveries are active."
+          },
+          "secret": {
+            "type": "string",
+            "title": "Secret",
+            "description": "Signing secret used to verify `X-Webhook-Signature`. Returned in **full only when freshly minted** \u2014 a first `PUT` (create) or `PUT?rotate_secret=true`. Store it then; every other response (a plain edit, or `GET`) masks it."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At",
+            "description": "ISO-8601 timestamp the config was first created."
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "date-time",
+            "title": "Updated At",
+            "description": "ISO-8601 timestamp of the most recent edit."
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "events",
+          "enabled",
+          "secret",
+          "created_at"
+        ],
+        "title": "WebhookConfig",
+        "description": "Wire shape of the org's webhook config."
+      },
+      "WebhookConfigRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "HTTPS endpoint Xtrace POSTs terminal ingest events to. Must resolve to a public address \u2014 private / loopback / link-local hosts are rejected.",
+            "examples": [
+              "https://api.zeabur.example/xtrace/webhooks"
+            ]
+          },
+          "events": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "memory.learning.completed",
+                    "memory.learning.failed"
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Events",
+            "description": "Event types to receive. Omit (or null) to subscribe to all events. An empty list is rejected.",
+            "examples": [
+              [
+                "memory.learning.completed",
+                "memory.learning.failed"
+              ]
+            ]
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "description": "When false, the config is stored but no events are delivered. Lets you pause delivery without losing the URL.",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "WebhookConfigRequest",
+        "description": "``PUT /v1/webhooks`` \u2014 set or replace the org's webhook config."
+      },
       "FactDetails": {
-        "description": "Per-row fact details \u2014 sits under ``Memory.details`` when\n``Memory.type == \"fact\"``. Mirrors the SoT shape, not xmem's raw\n``Fact`` shape: e.g. xmem's ``source_artifact_id`` \u2192 ``artifact_id``.",
+        "description": "Per-row fact details \u2014 sits under ``Memory.details`` when\n``Memory.type == \"fact\"``.",
         "properties": {
           "fact_type": {
             "anyOf": [
@@ -1678,7 +3087,7 @@
         "type": "object"
       },
       "ArtifactDetails": {
-        "description": "Per-row artifact details under ``Memory.details`` when\n``Memory.type == \"artifact\"``.\n\nWire-field renames vs xmem's ``Artifact`` schema:\n- ``Artifact.name`` \u2192 ``details.title``\n- ``Artifact.descriptor_fact_ids`` \u2192 ``details.source_fact_ids``\n- ``Artifact.root_artifact_id`` \u2192 ``details.root_id``\n\n``full_content`` is opt-in \u2014 omitted on list/search by default,\nincluded on ``GET /v1/memories/{id}`` and when\n``include=[\"full_content\"]`` is set on list/search.",
+        "description": "Per-row artifact details under ``Memory.details`` when\n``Memory.type == \"artifact\"``.\n\n``full_content`` is opt-in \u2014 omitted on list/search by default,\nincluded on ``GET /v1/memories/{id}`` and when\n``include=[\"full_content\"]`` is set on list/search.",
         "properties": {
           "title": {
             "anyOf": [
@@ -1814,6 +3223,117 @@
         },
         "title": "EpisodeDetails",
         "type": "object"
+      },
+      "DirectiveDetails": {
+        "description": "Per-row directive details under ``Memory.details`` when ``Memory.type`` is\n``\"lesson\"`` or ``\"procedure\"`` \u2014 a directive recalled by the symbol tripwire.\n\nPopulated from the recalled ``Fact`` plus the relevance gate. ``because`` /\n``confidence`` are filled only under ``mode=compose`` (the gate ran); under\n``mode=retrieve`` they are null (deterministic stage-1 tripwire only).",
+        "properties": {
+          "fact_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "`lesson` or `procedure`.",
+            "title": "Fact Type"
+          },
+          "trigger_entities": {
+            "description": "The concrete file/symbol anchors this directive fires on.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Trigger Entities",
+            "type": "array"
+          },
+          "matched_on": {
+            "description": "The subset of `trigger_entities` the in-flight action actually matched.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Matched On",
+            "type": "array"
+          },
+          "because": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Why the gate kept this directive for the current task. Null under `mode=retrieve`.",
+            "title": "Because"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Gate confidence (0\u20131). Null under `mode=retrieve`.",
+            "title": "Confidence"
+          },
+          "observation_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "How many times this directive has been re-confirmed.",
+            "title": "Observation Count"
+          },
+          "last_confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "ISO-8601 of the last re-confirmation.",
+            "format": "date-time",
+            "title": "Last Confirmed At"
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Typed procedure steps, in order (`type: \"procedure\"` only). The row's `text` already renders them as a numbered list; this is the structured form for callers that format their own.",
+            "examples": [
+              [
+                "Run the build",
+                "Push the image"
+              ]
+            ],
+            "title": "Steps"
+          }
+        },
+        "title": "DirectiveDetails",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1821,30 +3341,32 @@
         "type": "apiKey",
         "in": "header",
         "name": "x-api-key",
-        "description": "Long-lived org API key. Alternative: `Authorization: Token <key>`."
+        "description": "Long-lived org API key. Alternative: `Authorization: Bearer <key>`."
       },
       "BearerToken": {
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "Token",
-        "description": "Long-lived API key sent as `Authorization: Token <api-key>`."
-      },
-      "OrgId": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-Org-Id",
-        "description": "Required alongside the API key (no key\u2192org reverse index)."
+        "description": "Long-lived API key sent as `Authorization: Bearer <api-key>`."
       }
     }
   },
   "security": [
     {
-      "ApiKeyHeader": [],
-      "OrgId": []
+      "ApiKeyHeader": []
     },
     {
-      "BearerToken": [],
-      "OrgId": []
+      "BearerToken": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://api.production.xtrace.ai",
+      "description": "Production"
+    },
+    {
+      "url": "https://api.staging.xtrace.ai",
+      "description": "Staging"
     }
   ]
 }

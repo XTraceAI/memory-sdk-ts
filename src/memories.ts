@@ -14,6 +14,7 @@ import type {
   ScopePool,
   SearchListEnvelope,
   SearchRequest,
+  TriggerRequest,
 } from "./types.js";
 
 /**
@@ -254,6 +255,46 @@ export class Memories {
    */
   async retrieve(body: SearchRequest, context: RequestContext = {}): Promise<SearchListEnvelope> {
     return this.search({ ...body, mode: "compose" }, context);
+  }
+
+  /**
+   * Procedural-memory recall for a pre-tool-call hook
+   * (`POST /v1/memories/trigger`). Call it right before a tool runs to pull
+   * the `lesson` / `procedure` directives past sessions recorded about the
+   * symbols it's touching — what worked, what didn't. Recall fires on the
+   * symbol tripwire (exact overlap between identifiers in `action` / `entities`
+   * and directives' `trigger_entities`), never a semantic query.
+   *
+   * What comes back is advisory: `data` carries {@link DirectiveMemory} rows
+   * (`details.matched_on` says which anchors fired; a procedure's `text`
+   * renders its steps as a numbered list) and, under the default
+   * `mode: "compose"`, `context` is a ready-to-inject markdown block.
+   *
+   * At least one scope axis (`user_id` / `agent_id` / `app_id` / `group_ids`)
+   * is required, plus a firing signal (`action` or `entities`) — the server
+   * 422s otherwise. Pass the `namespace` used at ingest to scope recall to
+   * that working context (global directives always pass).
+   *
+   * @example
+   * const res = await client.memories.trigger({
+   *   user_id: "agent-7",
+   *   namespace: "acct:acme-corp",
+   *   action: { tool: "stripe.refunds.create", args: { invoice_id: "INV-42" } },
+   *   task: "process Acme's refund request",
+   * });
+   * if (res.context) injectIntoPrompt(res.context);
+   */
+  async trigger(body: TriggerRequest, context: RequestContext = {}): Promise<SearchListEnvelope> {
+    const { body: response } = await this.http.request<SearchListEnvelope>(
+      "POST",
+      "/v1/memories/trigger",
+      {
+        body,
+        signal: context.signal,
+        requestId: context.requestId,
+      },
+    );
+    return response;
   }
 
   /**
