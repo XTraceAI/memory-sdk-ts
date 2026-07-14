@@ -1,7 +1,10 @@
 // Hand-written types matching openapi/memory_v2.json.
 // Regenerate the canonical version with `npm run gen:types` once the spec is final.
 
-export type MemoryType = "fact" | "artifact" | "episode";
+export type MemoryType = "fact" | "artifact" | "episode" | "lesson" | "procedure";
+
+/** The subset of memory types that are situated directives (symbol-tripwire recall). */
+export type DirectiveType = "lesson" | "procedure";
 
 export type Role = "user" | "assistant" | "system";
 
@@ -55,6 +58,29 @@ export interface EpisodeDetails {
   artifact_ids: string[];
 }
 
+/**
+ * Type-specific extension for a `lesson` / `procedure` memory — a situated
+ * directive recalled by the symbol tripwire (`POST /v1/memories/trigger`).
+ */
+export interface DirectiveDetails {
+  /** `"lesson"` or `"procedure"`. */
+  fact_type: string | null;
+  /** The concrete identifiers this directive fires on (files, symbols, tools, endpoints, ids). */
+  trigger_entities: string[];
+  /** The subset of `trigger_entities` the in-flight action actually matched. */
+  matched_on: string[];
+  because: string | null;
+  confidence: number | null;
+  observation_count: number | null;
+  last_confirmed_at: string | null;
+  /**
+   * Typed procedure steps, in order (`type: "procedure"` only). The row's
+   * `text` already renders them as a numbered list; this is the structured
+   * form for callers that format their own.
+   */
+  steps: string[] | null;
+}
+
 interface MemoryBase<T extends MemoryType, D> {
   id: string;
   object: "memory";
@@ -77,7 +103,8 @@ interface MemoryBase<T extends MemoryType, D> {
 export type FactMemory = MemoryBase<"fact", FactDetails>;
 export type ArtifactMemory = MemoryBase<"artifact", ArtifactDetails>;
 export type EpisodeMemory = MemoryBase<"episode", EpisodeDetails>;
-export type Memory = FactMemory | ArtifactMemory | EpisodeMemory;
+export type DirectiveMemory = MemoryBase<DirectiveType, DirectiveDetails>;
+export type Memory = FactMemory | ArtifactMemory | EpisodeMemory | DirectiveMemory;
 
 export interface IngestRequest {
   messages: Message[];
@@ -94,6 +121,22 @@ export interface IngestRequest {
   timestamp_format?: string;
   /** Run the artifact-extraction stage. Defaults to `true` in the SDK; pass `false` to skip it. */
   extract_artifacts?: boolean;
+  /**
+   * Ingest through the agentic (task-aware) path: recall-first extraction, a
+   * Stage-2 noise filter, agentic artifact detection, a structured session
+   * gist — and the second facts-only pass that captures situated directives
+   * (`lesson` / `procedure`) for `POST /v1/memories/trigger` recall. Use for
+   * tool-using / coding-agent sessions.
+   */
+  agentic?: boolean;
+  /**
+   * Namespace this session belongs to — the working context (a coding agent's
+   * repo, a support agent's customer account, an ops agent's service).
+   * Captured directives are written under it, so `trigger` calls with the same
+   * `namespace` surface them there instead of in every context. Directives
+   * ingested without one are global. Unrelated to the tenancy axes.
+   */
+  namespace?: string;
   /**
    * Group ids to associate with this ingest — the classifier tags each
    * extracted memory with the subset it belongs to. Each must be a registered
@@ -207,6 +250,53 @@ export interface SearchRequest {
 }
 
 /**
+ * The in-flight tool call a `trigger` recall fires on. Greppable identifiers
+ * are extracted server-side (`tool` name, `args` values, optional `output`)
+ * and matched exactly against directives' `trigger_entities`.
+ */
+export interface ActionContext {
+  /** The tool / command about to run (e.g. `"Edit"`, `"stripe.refunds.create"`). */
+  tool?: string;
+  /** Its arguments — the concrete handles (file paths, ids) are the firing signal. */
+  args?: Record<string, unknown>;
+  /** Optional: the most recent tool output, when recalling in reaction to a result/error. */
+  output?: string;
+}
+
+/**
+ * `POST /v1/memories/trigger` — procedural-memory recall for a pre-tool-call
+ * hook. Supply `action` (or pre-extracted `entities`) plus at least one scope
+ * axis (`user_id` / `agent_id` / `app_id` / `group_ids`).
+ */
+export interface TriggerRequest {
+  /** The in-flight tool call — the firing signal. Supply this or `entities`. */
+  action?: ActionContext;
+  /** Escape hatch: exact identifiers to fire on, bypassing extraction from `action`. */
+  entities?: string[];
+  /** Which corpora to recall. Defaults server-side to both. */
+  include?: DirectiveType[];
+  /**
+   * Namespace the agent works in right now (whatever was passed at ingest).
+   * Narrows recall to directives learned there **plus global ones** — never
+   * hides globals, so it is always safe to pass.
+   */
+  namespace?: string;
+  /** The agent's current goal, one line — feeds the relevance gate under `mode: "compose"`. */
+  task?: string;
+  /**
+   * `"compose"` (server default): tripwire recall + one LLM relevance gate;
+   * `data` carries the gated rows, `context` an assembled markdown block.
+   * `"retrieve"`: recall only — no LLM, cheaper; `context` is null.
+   */
+  mode?: SearchMode;
+  /** Scope axis — at least one of the four is required. */
+  user_id?: string;
+  group_ids?: string[];
+  agent_id?: string;
+  app_id?: string;
+}
+
+/**
  * One scoped search whose results {@link Memories.recall} unions with the others.
  * Axes within a pool **AND** together (a normal scoped search); recall **unions**
  * the pools, dedupes, ranks, and renders one prompt.
@@ -288,7 +378,8 @@ export interface PromptTemplate {
   /** Section header for a group whose name didn't resolve; `{id}` is substituted. */
   unknownGroupLabel: string;
   /** Inline tag prepended per memory type (`""` = no tag), e.g. `artifact: "[document] "`. */
-  typeLabels: Record<MemoryType, string>;
+  /** Per-type lead tag. Types without an entry render untagged (`?? ""` fallback). */
+  typeLabels: Partial<Record<MemoryType, string>>;
   /** Append `[cat, …]` per line when the memory has categories. */
   includeCategories: boolean;
   /** Append `(recorded YYYY-MM-DD)` per line when available. */
