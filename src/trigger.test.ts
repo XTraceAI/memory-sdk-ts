@@ -73,11 +73,11 @@ describe("memories.trigger", () => {
     const res = await memories.trigger(body);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].method).toBe("POST");
-    expect(calls[0].path).toBe("/v1/memories/trigger");
+    expect(calls[0]!.method).toBe("POST");
+    expect(calls[0]!.path).toBe("/v1/memories/trigger");
     // The wire body is passed through untouched — no client-side defaults
     // (unlike ingest's extract_artifacts), so server defaults stay in charge.
-    expect(calls[0].body).toEqual(body);
+    expect(calls[0]!.body).toEqual(body);
     expect(res.context).toContain("Relevant directives");
     expect(res.data).toHaveLength(1);
   });
@@ -109,7 +109,7 @@ describe("memories.trigger", () => {
       mode: "retrieve",
     });
 
-    const row = res.data[0];
+    const row = res.data[0]!;
     expect(row.type).toBe("procedure");
     const d = row as DirectiveMemory;
     expect(d.details.matched_on).toEqual(["billing/credit_notes"]);
