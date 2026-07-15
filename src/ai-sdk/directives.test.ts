@@ -119,6 +119,58 @@ describe("withDirectiveRecall", () => {
     expect(seen).toEqual(["t:d1"]);
   });
 
+  it("does NOT mark a directive fired when it could be neither injected nor observed", async () => {
+    // Array result, no observer → nowhere to deliver d1. It must keep its
+    // chance: a later string-returning call should still surface it.
+    const d = lesson("d1", "the lesson");
+    const { client } = fakeClient([[d], [d]]);
+    const tools = withDirectiveRecall(
+      {
+        arr: { execute: async () => [1, 2, 3] },
+        str: { execute: async () => "ok" },
+      },
+      client,
+      { user_id: "u" },
+    );
+    const first = await runTool(tools, "arr", {}); // undeliverable
+    const second = (await runTool(tools, "str", {})) as string; // deliverable
+    expect(first).toEqual([1, 2, 3]);
+    expect(second).toContain("the lesson"); // NOT lost — surfaced at its real moment
+  });
+
+  it("does not spread non-plain objects (Date/Map/class) — falls back to observer", async () => {
+    const seen: string[] = [];
+    const when = new Date("2026-07-15T00:00:00Z");
+    const { client } = fakeClient([[lesson("d1", "the lesson")]]);
+    const tools = withDirectiveRecall(
+      { t: { execute: async () => when } },
+      client,
+      { user_id: "u" },
+      { onDirectives: (ds) => seen.push(ds[0]!.id) },
+    );
+    const out = await runTool(tools, "t", {});
+    expect(out).toBe(when); // same Date instance, uncorrupted
+    expect(seen).toEqual(["d1"]); // delivered via the observer channel
+  });
+
+  it("reactive directives take budget priority over pre-recall ones", async () => {
+    const pre = [lesson("p1", "pre one"), lesson("p2", "pre two")];
+    const reactive = [lesson("r1", "reactive cause")];
+    const { client } = fakeClient([pre, reactive]);
+    const tools = withDirectiveRecall(
+      { t: { execute: async () => "Error: boom" } },
+      client,
+      { user_id: "u" },
+      { maxDirectives: 2 },
+    );
+    const out = (await runTool(tools, "t", {})) as string;
+    // Budget 2: the cause-anchored reactive directive must appear, not be
+    // crowded out by a full pre-recall.
+    expect(out).toContain("reactive cause");
+    expect(out).toContain("pre one");
+    expect(out).not.toContain("pre two"); // the one dropped by the budget
+  });
+
   it("fires a reactive recall with the output when a string result looks like a failure", async () => {
     const reactiveLesson = lesson("d2", "when FIN-409 rejects the refund, use credit notes");
     const { client, calls } = fakeClient([[], [reactiveLesson]]);

@@ -169,15 +169,6 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
     }
   }
 
-  function surface(directives: DirectiveMemory[], toolName: string): void {
-    for (const d of directives) fired.add(d.id);
-    try {
-      options.onDirectives?.(directives, toolName);
-    } catch {
-      /* observer errors never break the tool call */
-    }
-  }
-
   function render(directives: DirectiveMemory[]): string {
     // Directive text is teammate-authored (untrusted): escape ALL angle
     // brackets so recalled content carries no markup the model could read as
@@ -196,25 +187,53 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
     );
   }
 
-  /** Attach directives to the result without breaking its shape. */
-  function inject(result: unknown, directives: DirectiveMemory[]): unknown {
-    if (directives.length === 0) return result;
+  // Only a genuine plain object is safe to spread — a Date / Map / Set / class
+  // instance / Buffer would lose its prototype and internal slots, silently
+  // corrupting the tool's structured result. Those fall back to the observer.
+  const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype;
+
+  /**
+   * Deliver directives with the result, recording them as fired ONLY when they
+   * were actually delivered — injected into the result shape OR handed to the
+   * observer. A directive recalled at a moment it can't be delivered (an array
+   * result with no observer) is NOT marked fired, so it keeps its chance at a
+   * later injectable call, exactly as the dedup contract promises.
+   * Returns `{ result, delivered }`.
+   */
+  function deliver(
+    result: unknown,
+    directives: DirectiveMemory[],
+    toolName: string,
+  ): { result: unknown; delivered: boolean } {
+    if (directives.length === 0) return { result, delivered: false };
+
+    let out = result;
+    let injected = false;
     if (typeof result === "string") {
-      return `${result}\n\n${render(directives)}`;
+      out = `${result}\n\n${render(directives)}`;
+      injected = true;
+    } else if (isPlainObject(result) && !(DIRECTIVE_FIELD in result)) {
+      // Don't clobber a field the tool legitimately returns under our name.
+      out = { ...result, [DIRECTIVE_FIELD]: render(directives) };
+      injected = true;
     }
-    if (
-      result !== null &&
-      typeof result === "object" &&
-      !Array.isArray(result) &&
-      !(DIRECTIVE_FIELD in (result as Record<string, unknown>))
-    ) {
-      // Don't clobber a field the tool legitimately returns under our name —
-      // fall back to the observer channel (surface() already fired).
-      return { ...(result as Record<string, unknown>), [DIRECTIVE_FIELD]: render(directives) };
+
+    // The observer always gets a chance (it fires whether or not the shape was
+    // injectable) and counts as delivery for the fired-once accounting.
+    let observed = false;
+    if (options.onDirectives) {
+      try {
+        options.onDirectives(directives, toolName);
+        observed = true;
+      } catch {
+        /* observer errors never break the tool call */
+      }
     }
-    // Arrays / numbers / undefined / field-collision: no safe seam — the
-    // onDirectives observer (already notified via surface()) is the channel.
-    return result;
+
+    const delivered = injected || observed;
+    if (delivered) for (const d of directives) fired.add(d.id);
+    return { result: out, delivered };
   }
 
   const wrapped: Record<string, unknown> = {};
@@ -246,16 +265,18 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
               output: redactOutput(result.slice(-1500), name),
             },
           });
-          const seen = new Set(directives.map((d) => d.id));
-          directives = [...directives, ...more.filter((d) => !seen.has(d.id))].slice(
+          // Reactive directives are cause-anchored — the most relevant at a
+          // failure — so they take PRIORITY in the budget (a full pre-recall
+          // must not crowd them out of the final slice).
+          const moreIds = new Set(more.map((d) => d.id));
+          directives = [...more, ...directives.filter((d) => !moreIds.has(d.id))].slice(
             0,
             maxDirectives,
           );
         }
 
         if (directives.length === 0) return result;
-        surface(directives, name);
-        return inject(result, directives);
+        return deliver(result, directives, name).result;
       },
     };
   }
