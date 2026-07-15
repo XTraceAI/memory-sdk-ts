@@ -297,6 +297,33 @@ describe("withDirectiveRecall", () => {
     expect(delivered).toHaveLength(1); // exactly one, never both
   });
 
+  it("re-throws a tool error and frees the reserved ids for a later call", async () => {
+    const d = () => lesson("d1", "the lesson");
+    const { client } = fakeClient([[d()], [d()]]);
+    let boom = true;
+    const tools = withDirectiveRecall(
+      {
+        t: {
+          execute: async () => {
+            if (boom) {
+              boom = false;
+              throw new Error("tool blew up");
+            }
+            return "ok";
+          },
+        },
+      },
+      client,
+      { user_id: "u" },
+    );
+    // First call throws — the wrapper must propagate it, not swallow it.
+    await expect(runTool(tools, "t", {})).rejects.toThrow("tool blew up");
+    // d1 was reserved during the failed call; it must be freed, so the next
+    // successful call still surfaces it.
+    const out = (await runTool(tools, "t", {})) as string;
+    expect(out).toContain("the lesson");
+  });
+
   it("passes through tools without an execute untouched", () => {
     const providerTool = { description: "provider-executed" };
     const tools = withDirectiveRecall(

@@ -271,7 +271,19 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
         };
 
         const preRecall = recall({ action: { tool: name, args: safeArgs } }, reserved);
-        const result = await originalExecute(args, callOptions);
+
+        let result: unknown;
+        try {
+          result = await originalExecute(args, callOptions);
+        } catch (err) {
+          // The tool threw — never swallow that. But first settle the
+          // in-flight recall so any ids it reserved are in `reserved`, then
+          // free them all (nothing was delivered) and re-throw. Otherwise a
+          // throwing tool would leak its reservations into `fired` forever.
+          await preRecall.catch(() => undefined);
+          release();
+          throw err;
+        }
         let directives = await preRecall;
 
         // Reactive pass: a failure-looking string result names the true
