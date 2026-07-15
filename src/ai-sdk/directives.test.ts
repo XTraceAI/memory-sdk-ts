@@ -279,6 +279,24 @@ describe("withDirectiveRecall", () => {
     expect(calls).toHaveLength(1); // pre-tool only; no reactive round-trip
   });
 
+  it("does not double-deliver the same directive across concurrent tool calls", async () => {
+    // Both parallel calls recall d1; optimistic reservation at recall time
+    // means exactly one delivers it (the AI SDK runs tools in parallel).
+    const d = () => lesson("d1", "the shared lesson");
+    const { client } = fakeClient([[d()], [d()]], { delayMs: 20 });
+    const tools = withDirectiveRecall(
+      { t: { execute: async () => "ok" } },
+      client,
+      { user_id: "u" },
+    );
+    const results = (await Promise.all([
+      runTool(tools, "t", {}),
+      runTool(tools, "t", {}),
+    ])) as string[];
+    const delivered = results.filter((r) => r.includes("the shared lesson"));
+    expect(delivered).toHaveLength(1); // exactly one, never both
+  });
+
   it("passes through tools without an execute untouched", () => {
     const providerTool = { description: "provider-executed" };
     const tools = withDirectiveRecall(

@@ -144,7 +144,17 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
   // gate-dropped candidate keeps its chance at its real moment later.
   const fired = new Set<string>();
 
-  async function recall(body: Omit<TriggerRequest, keyof DirectiveRecallScope>) {
+  /**
+   * Recall and OPTIMISTICALLY RESERVE. The filter-then-reserve step runs
+   * synchronously in this promise's post-await tail, with no `await` between
+   * `!fired.has` and `fired.add` — so two concurrent tool calls (the AI SDK
+   * runs tools in parallel) can't both select the same directive. Reserved
+   * ids the call doesn't ultimately deliver are released by the caller.
+   */
+  async function recall(
+    body: Omit<TriggerRequest, keyof DirectiveRecallScope>,
+    reserved: Set<string>,
+  ) {
     const req: TriggerRequest = {
       ...body,
       user_id: scope.user_id,
@@ -161,9 +171,14 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
       const res = await Promise.race([client.memories.trigger(req), timeout]);
       if (!res) return [];
       const rows = ((res as SearchListEnvelope).data ?? []) as DirectiveMemory[];
-      return rows
+      const selected = rows
         .filter((d) => d && (d.type === "lesson" || d.type === "procedure") && !fired.has(d.id))
         .slice(0, maxDirectives);
+      for (const d of selected) {
+        fired.add(d.id); // reserve now — closes the check-then-act race
+        reserved.add(d.id);
+      }
+      return selected;
     } catch {
       return [];
     }
@@ -194,11 +209,11 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
     v !== null && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype;
 
   /**
-   * Deliver directives with the result, recording them as fired ONLY when they
-   * were actually delivered — injected into the result shape OR handed to the
-   * observer. A directive recalled at a moment it can't be delivered (an array
-   * result with no observer) is NOT marked fired, so it keeps its chance at a
-   * later injectable call, exactly as the dedup contract promises.
+   * Deliver directives with the result. Returns `delivered = true` when they
+   * were actually surfaced — injected into the result shape OR handed to the
+   * observer. Reservation is owned by `recall`; the caller RELEASES ids that
+   * weren't delivered, so a directive recalled at a moment it can't be
+   * delivered keeps its chance at a later injectable call.
    * Returns `{ result, delivered }`.
    */
   function deliver(
@@ -231,9 +246,7 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
       }
     }
 
-    const delivered = injected || observed;
-    if (delivered) for (const d of directives) fired.add(d.id);
-    return { result: out, delivered };
+    return { result: out, delivered: injected || observed };
   }
 
   const wrapped: Record<string, unknown> = {};
@@ -250,7 +263,14 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
         // Pre-tool recall runs concurrently — the tool is never delayed.
         // args are redacted before they leave the process (secrets/PII).
         const safeArgs = redactArgs((args ?? {}) as Record<string, unknown>, name);
-        const preRecall = recall({ action: { tool: name, args: safeArgs } });
+        // Every id recall reserves for this call — released below unless
+        // actually delivered.
+        const reserved = new Set<string>();
+        const release = () => {
+          for (const id of reserved) fired.delete(id);
+        };
+
+        const preRecall = recall({ action: { tool: name, args: safeArgs } }, reserved);
         const result = await originalExecute(args, callOptions);
         let directives = await preRecall;
 
@@ -258,13 +278,16 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
         // cause — identifiers the args never showed. One extra recall,
         // same dedup horizon.
         if (reactive && typeof result === "string" && isFailure(result, name)) {
-          const more = await recall({
-            action: {
-              tool: name,
-              args: safeArgs,
-              output: redactOutput(result.slice(-1500), name),
+          const more = await recall(
+            {
+              action: {
+                tool: name,
+                args: safeArgs,
+                output: redactOutput(result.slice(-1500), name),
+              },
             },
-          });
+            reserved,
+          );
           // Reactive directives are cause-anchored — the most relevant at a
           // failure — so they take PRIORITY in the budget (a full pre-recall
           // must not crowd them out of the final slice).
@@ -275,8 +298,16 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
           );
         }
 
-        if (directives.length === 0) return result;
-        return deliver(result, directives, name).result;
+        if (directives.length === 0) {
+          release();
+          return result;
+        }
+        const { result: out, delivered } = deliver(result, directives, name);
+        // Keep only the reservations we actually delivered; release the rest —
+        // ids the budget slice dropped, and everything when nothing landed.
+        const keep = delivered ? new Set(directives.map((d) => d.id)) : new Set<string>();
+        for (const id of reserved) if (!keep.has(id)) fired.delete(id);
+        return out;
       },
     };
   }
