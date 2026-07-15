@@ -22,10 +22,10 @@
  *
  * **Trust & privacy.** Directive text is authored by past sessions —
  * teammate-influenceable data, NOT trusted instructions. It is injected into
- * the model's context, so treat it as untrusted content: this wrapper
- * neutralizes the `<team-directives>` delimiter inside directive text so
- * recalled content can't break out of its block, but a downstream model can
- * still be steered by adversarial directive text — the usual stored-prompt
+ * the model's context, so treat it as untrusted content: this wrapper escapes
+ * angle brackets in directive text so recalled content carries no markup that
+ * could close or spoof the `<team-directives>` block, but a downstream model
+ * can still be steered by adversarial directive text — the usual stored-prompt
  * caveat applies. And tool `args` / error `output` are sent to the memory
  * service as the recall firing signal; they can carry secrets or PII, so pass
  * `redactArgs` / `redactOutput` to scrub sensitive fields before they leave
@@ -179,12 +179,13 @@ export function withDirectiveRecall<TOOLS extends Record<string, unknown>>(
   }
 
   function render(directives: DirectiveMemory[]): string {
-    // Directive text is teammate-authored (untrusted): neutralize any
-    // <team-directives> / </team-directives> lookalikes so recalled content
-    // can't spoof or break out of its own block. Case-insensitive; keeps the
-    // text readable by inserting a zero-width break in the tag.
-    const neutralize = (s: string) =>
-      s.replace(/<(\/?)team-directives>/gi, "<$1team​-directives>");
+    // Directive text is teammate-authored (untrusted): escape ALL angle
+    // brackets so recalled content carries no markup the model could read as
+    // structure — no `<team-directives>` lookalike (nor any whitespace /
+    // attribute variant) can spoof or close the block. Escaping the whole
+    // class is provably complete where targeting one tag was not; the model
+    // still reads `&lt;`/`&gt;` as the literal characters.
+    const neutralize = (s: string) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const lines = directives.map((d) => `- [${d.type.toUpperCase()}] ${neutralize(d.text)}`);
     return (
       "<team-directives>\n" +
